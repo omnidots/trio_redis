@@ -1,0 +1,10 @@
+[flake8]
+ignore = E128, W504
+exclude =
+    .pytest_cache,
+    .eggs,
+    *.egg-info,
+    dist,
+    venv
+max-complexity = 10
+max-line-length = 125
