@@ -1,3 +1,4 @@
+from contextlib import asynccontextmanager
 from itertools import repeat
 from urllib.parse import urlparse, parse_qs
 
@@ -126,17 +127,22 @@ class RedisPool(_BaseRedis, *_commands):
         self._free.append(client)
         self._limit.release()
 
-    def use(self):
+    @asynccontextmanager
+    async def borrow(self):
         """Explicitly borrow a client from the pool.
 
         For example::
 
-            async with pool.use() as client:
+            async with pool.borrow() as client:
                 await client.set('a', 1)
                 await client.set('b', 2)
                 await client.set('c', 3)
         """
-        return self.Context(self)
+        client = await self.acquire()
+        try:
+            yield client
+        finally:
+            await self.release(client)
 
     async def execute(self, command, parse_callback=None):
         client = await self.acquire()
@@ -154,19 +160,6 @@ class RedisPool(_BaseRedis, *_commands):
 
     def select(self, index):
         raise NotImplementedError('SELECT not implemented for RedisPool')
-
-    class Context:
-        def __init__(self, pool):
-            self._pool = pool
-            self._client = None
-
-        async def __aenter__(self):
-            self._client = await self._pool.acquire()
-            return self._client
-
-        async def __aexit__(self, exc_type, exc, tb):
-            await self._pool.release(self._client)
-            self._client = None
 
 
 class Redis(_BaseRedis, *_commands):

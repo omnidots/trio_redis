@@ -79,3 +79,8 @@ async def test_redis_pool_commands(redis_pool):
     assert result
     result = await redis_pool.get('x')
     assert result == b'1'
+
+
+async def test_redis_pool_borrow(redis_pool):
+    async with redis_pool.borrow() as client:
+        await client.set('a', 1)
