@@ -10,6 +10,7 @@ __all__ = [
 
 
 class Connection:
+    """A TCP connection to a Redis server."""
     def __init__(self, host, port):
         self.host = host
         self.port = port
@@ -62,6 +63,11 @@ class Connection:
             self._is_busy = False
 
     async def _read_reply(self, expected=1):
+        """Read and parse replies from connection.
+
+        ``expected`` is the amount of expected replies. In case of
+        pipelining this number is set to the amount of commands sent.
+        """
         replys = []
 
         while True:
@@ -76,6 +82,28 @@ class Connection:
 
 
 def _build_request(args):
+    """Build a RESP request.
+
+    A request consists of a RESP array with RESP bulk strings::
+
+        * [ARRAY LENGHT] \r\n [ARRAY ELEMENTS]
+
+    ``ARRAY LENGHT`` is the length of the array, the number of bulk
+    strings. And ``ARRAY ELEMENTS`` contains the bulk strings::
+
+        $ [STRING LENGTH] \r\n [STRING DATA] \r\n
+
+    Here's a real example of ``GET mykey``::
+
+        *2\r\n$3\r\nGET\r\n$5\r\nmykey\r\n
+
+    See `Redis Protocol specification`_ for more information.
+
+    .. _Redis Protocol specification: https://redis.io/topics/protocol
+
+    The hiredis library only exposes and API for decoding responses,
+    not building request strings. That's why this function is needed.
+    """
     out = [b'*%d\r\n' % len(args)]
 
     for part in args:

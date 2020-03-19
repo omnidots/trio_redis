@@ -60,6 +60,19 @@ class _BaseRedis:
 
 
 class RedisPool(_BaseRedis, *_commands):
+    """A pool of Redis clients.
+
+    It's not needed to explicitly borrow a client from the pool. All
+    commands (except SELECT) are implemented, acquiring and releasing
+    clients is done behind the scenes.
+
+    ``minimum`` is the minimum amount of clients created. When needed
+    new client instances are created until a maximum is reached (see
+    ``maximum``).
+
+    An instance of this class can be used concurrently. Instances of
+    ``Redis`` cannot.
+    """
     def __init__(self, host=None, port=None, db=None, minimum=1, maximum=10):
         super().__init__(host, port, db)
         self.minimum = minimum
@@ -114,6 +127,15 @@ class RedisPool(_BaseRedis, *_commands):
         self._limit.release()
 
     def use(self):
+        """Explicitly borrow a client from the pool.
+
+        For example::
+
+            async with pool.use() as client:
+                await client.set('a', 1)
+                await client.set('b', 2)
+                await client.set('c', 3)
+        """
         return self.Context(self)
 
     async def execute(self, command, parse_callback=None):
