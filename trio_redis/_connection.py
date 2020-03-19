@@ -111,7 +111,7 @@ def _build_request(args):
             part = _str_to_bytes(part)
         elif isinstance(part, int):
             part = b'%d' % part
-        out.append(b'$%d\r\n%s\r\n' % (len(part), part))
+        out.append(b'$%d\r\n%b\r\n' % (len(part), part))
 
     return b''.join(out)
 
