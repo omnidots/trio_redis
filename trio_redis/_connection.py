@@ -86,9 +86,9 @@ def _build_request(args):
 
     A request consists of a RESP array with RESP bulk strings::
 
-        * [ARRAY LENGHT] \r\n [ARRAY ELEMENTS]
+        * [ARRAY LENGTH] \r\n [ARRAY ELEMENTS]
 
-    ``ARRAY LENGHT`` is the length of the array, the number of bulk
+    ``ARRAY LENGTH`` is the length of the array, the number of bulk
     strings. And ``ARRAY ELEMENTS`` contains the bulk strings::
 
         $ [STRING LENGTH] \r\n [STRING DATA] \r\n
