@@ -104,16 +104,16 @@ def _build_request(args):
     The hiredis library only exposes and API for decoding responses,
     not building request strings. That's why this function is needed.
     """
-    out = [b'*%d\r\n' % len(args)]
+    out = b'*%d\r\n' % len(args)
 
     for part in args:
         if isinstance(part, str):
             part = _str_to_bytes(part)
         elif isinstance(part, int):
             part = b'%d' % part
-        out.append(b'$%d\r\n%b\r\n' % (len(part), part))
+        out += b'$%d\r\n%b\r\n' % (len(part), part)
 
-    return b''.join(out)
+    return out
 
 
 def _str_to_bytes(v):
