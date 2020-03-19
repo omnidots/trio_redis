@@ -68,8 +68,7 @@ class RedisPool(_BaseRedis, *_commands):
     clients is done behind the scenes.
 
     ``minimum`` is the minimum amount of clients created. When needed
-    new client instances are created until a maximum is reached (see
-    ``maximum``).
+    new client instances are created until ``maximum`` is reached.
 
     An instance of this class can be used concurrently. Instances of
     ``Redis`` cannot.
