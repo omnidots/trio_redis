@@ -68,7 +68,7 @@ class Connection:
         ``expected`` is the amount of expected replies. In case of
         pipelining this number is set to the amount of commands sent.
         """
-        replys = []
+        replies = []
 
         while True:
             self._parser.feed(await self._stream.receive_some())
@@ -76,9 +76,9 @@ class Connection:
                 reply = self._parser.gets()
                 if reply is False:
                     break  # Read more data, go back to the outer loop.
-                replys.append(reply)
-                if len(replys) == expected:
-                    return replys
+                replies.append(reply)
+                if len(replies) == expected:
+                    return replies
 
 
 def _build_request(args):
