@@ -112,7 +112,7 @@ def _build_request(args):
         elif isinstance(part, int):
             part = b'%d' % part
         elif not isinstance(part, bytes):
-            raise ValueError("only suppports str and int")
+            raise ValueError('only bytes, str, and int are supported')
         out += b'$%d\r\n%b\r\n' % (len(part), part)
 
     return out
