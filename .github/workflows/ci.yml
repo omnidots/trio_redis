@@ -1,0 +1,47 @@
+name: CI
+
+on: [push]
+
+jobs:
+  test:
+    name: Test
+    strategy:
+      max-parallel: 4
+      matrix:
+        operating-system: [ubuntu-latest]
+        python-version: ['3.7', '3.8']
+    runs-on: ${{ matrix.operating-system }}
+    services:
+      redis:
+        image: redis:5.0.7-alpine3.11
+        ports:
+          - 6379:6379
+        options: --entrypoint redis-server
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v2.0.0
+        with:
+          fetch-depth: 1
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v1.1.1
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Restore pip cache
+        uses: actions/cache@v1.1.2
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+      - name: Test trio_redis
+        env:
+          REDIS_HOST: localhost
+          REDIS_PORT: ${{ job.services.redis.ports[6379] }}
+        run: |
+          pytest --redis-url redis://$REDIS_HOST:$REDIS_PORT --cov-report=term
+      - name: Flake8
+        run: |
+          flake8
