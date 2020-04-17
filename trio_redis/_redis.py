@@ -218,6 +218,10 @@ class Pipeline(*_commands):
         return self
 
     def __await__(self):
+        if not self._buffer:
+            async def return_empty_list():
+                return []
+            return return_empty_list().__await__()
         return self._redis.execute_many(
             self._buffer,
             self._callbacks,
