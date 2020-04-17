@@ -3,7 +3,7 @@ from setuptools import setup
 
 setup(
     name='trio_redis',
-    version='0.1.0',
+    version='0.2.0',
     description='A Trio-based Redis client.',
     author='Omnidots',
     author_email='support@omnidots.nl',
