@@ -76,6 +76,8 @@ def parse_xpending(response, **options):
 
 
 def parse_xpending_range(reply):
+    if not reply:
+        return []
     return [
         {
             'message_id': r[0],
