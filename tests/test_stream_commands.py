@@ -126,7 +126,7 @@ async def test_xlen(redis):
     assert result == 1
 
 
-async def test_xpending(redis):
+async def test_xpending_range(redis):
     key = 'x'
     group = 'group_a'
 
@@ -181,3 +181,101 @@ async def test_xclaim(redis):
 
     result = await redis.xack(key, group, message_id)
     assert result == 1
+
+
+async def test_xpending(redis):
+    key = 'x'
+    group = 'group_a'
+    consumer_1 = 'consumer_1'
+    consumer_2 = 'consumer_2'
+
+    # Prepare: create stream and group, add a message,
+    # and read and not acknowledge message.
+    await redis.xgroup_create(key, group, mkstream=True)
+    await redis.xadd('x', {b'foo': b'bar'})
+    await redis.xreadgroup(group, consumer_1, {key: '>'})
+    await redis.xadd('x', {b'abc': b'xyz'})
+    await redis.xreadgroup(group, consumer_2, {key: '>'})
+
+    result = await redis.xpending(key, group)
+
+    assert result[b'consumers'] == [
+        {b'name': b'consumer_1', b'pending': b'1'},
+        {b'name': b'consumer_2', b'pending': b'1'},
+    ]
+    assert result[b'pending'] == 2
+
+
+async def test_xinfo_groups(redis):
+    key = 'x'
+    await redis.xgroup_create(key, 'group_a', mkstream=True)
+    await redis.xgroup_create(key, 'group_b', mkstream=True)
+
+    msgid = await redis.xadd(key, {b'foo': b'bar'})
+    await redis.xreadgroup('group_a', 'consumer_1', {key: '>'})
+
+    result = await redis.xinfo_groups(key)
+
+    assert result == [
+        {
+            b'consumers': 1,
+            b'last-delivered-id': msgid,
+            b'name': b'group_a',
+            b'pending': 1,
+        },
+        {
+            b'consumers': 0,
+            b'last-delivered-id': b'0-0',
+            b'name': b'group_b',
+            b'pending': 0,
+        },
+    ]
+
+
+async def test_xinfo_stream(redis):
+    key = 'x'
+    await redis.xgroup_create(key, 'group_a', mkstream=True)
+    payload = {b'foo': b'bar'}
+    msgid_1 = await redis.xadd(key, payload)
+    msgid_2 = await redis.xadd(key, payload)
+
+    result = await redis.xinfo_stream(key)
+
+    assert result == {
+        b'first-entry': (msgid_1, payload),
+        b'groups': 1,
+        b'last-entry': (msgid_2, payload),
+        b'last-generated-id': msgid_2,
+        b'length': 2,
+        b'radix-tree-keys': 1,
+        b'radix-tree-nodes': 2,
+    }
+
+
+async def test_xdel(redis):
+    key = 'x'
+    msgid = await redis.xadd(key, {b'foo': b'bar'})
+    await redis.xadd(key, {b'foo': b'bar'})
+
+    assert await redis.xlen(key) == 2
+
+    result = await redis.xdel(key, msgid)
+
+    assert result == 1
+    assert await redis.xlen(key) == 1
+
+
+async def test_xtrim(redis):
+    key = 'x'
+
+    p = redis.pipeline()
+    for n in range(100):
+        p.xadd(key, {b'n': n})
+    await p
+
+    assert await redis.xlen(key) == 100
+
+    result = await redis.xtrim(key, 50, approximate=False)
+
+    assert result == 50
+    assert await redis.xlen(key) == 50
