@@ -189,8 +189,8 @@ async def test_xpending(redis):
     consumer_1 = 'consumer_1'
     consumer_2 = 'consumer_2'
 
-    # Prepare: create stream and group, add a message,
-    # and read and not acknowledge message.
+    # Prepare: create stream and group, add a message
+    # and read and don't acknowledge message.
     await redis.xgroup_create(key, group, mkstream=True)
     await redis.xadd('x', {b'foo': b'bar'})
     await redis.xreadgroup(group, consumer_1, {key: '>'})

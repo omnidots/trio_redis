@@ -47,12 +47,12 @@ def parse_stream_list(reply):
 
 def parse_xinfo_stream(response):
     data = pairs_to_dict(response)
-    first = data[b'first-entry']
-    if first is not None:
-        data[b'first-entry'] = (first[0], pairs_to_dict(first[1]))
-    last = data[b'last-entry']
-    if last is not None:
-        data[b'last-entry'] = (last[0], pairs_to_dict(last[1]))
+
+    for k in (b'first-entry', b'last-entry'):
+        item = data[k]
+        if item is not None:
+            data[k] = (item[0], pairs_to_dict(item[1]))
+
     return data
 
 
@@ -78,6 +78,7 @@ def parse_xpending(response, **options):
 def parse_xpending_range(reply):
     if not reply:
         return []
+
     return [
         {
             'message_id': r[0],
@@ -232,8 +233,8 @@ class StreamCommands:
         return self.execute([b'XPENDING', key, groupname], parse_xpending)
 
     def xpending_range(self, key, groupname, start, end, count, consumername=None):
-        # NOTE: The start, end, and count arguments are optional to
-        # XPENDING, but we only user the command with these arguments.
+        # NOTE: The start, end and count arguments are optional to
+        # XPENDING, but we only use the command with these arguments.
         # So they are not optional here.
 
         pieces = [b'XPENDING', key, groupname, start, end, count]
@@ -291,8 +292,10 @@ class StreamCommands:
 
     def xtrim(self, key, maxlen, approximate=True):
         pieces = [b'XTRIM', key, b'MAXLEN']
+
         if approximate:
             pieces.append(b'~')
+
         pieces.append(maxlen)
         return self.execute(pieces, int)
 
