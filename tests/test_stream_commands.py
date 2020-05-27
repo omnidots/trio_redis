@@ -254,15 +254,24 @@ async def test_xinfo_stream(redis):
 
 async def test_xdel(redis):
     key = 'x'
-    msgid = await redis.xadd(key, {b'foo': b'bar'})
-    await redis.xadd(key, {b'foo': b'bar'})
+    payload_1 = {b'foo1': b'bar1'}
+    payload_2 = {b'foo2': b'bar2'}
+    msgid_1 = await redis.xadd(key, payload_1)
+    msgid_2 = await redis.xadd(key, payload_2)
 
     assert await redis.xlen(key) == 2
+    assert await redis.xrange(key) == [
+        (msgid_1, payload_1),
+        (msgid_2, payload_2),
+    ]
 
-    result = await redis.xdel(key, msgid)
+    result = await redis.xdel(key, msgid_1)
 
     assert result == 1
     assert await redis.xlen(key) == 1
+    assert await redis.xrange(key) == [
+        (msgid_2, payload_2),
+    ]
 
 
 async def test_xtrim(redis):
