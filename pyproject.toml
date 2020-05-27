@@ -1,0 +1,37 @@
+[tool.poetry]
+name = "trio_redis"
+version = "0.2.0"
+description = "A Redis client for Trio."
+authors = ["Omnidots B.V. <support@omnidots.nl>"]
+license = "MIT"
+readme = "README.rst"
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3.7",
+    "Programming Language :: Python :: 3.8",
+]
+packages = [
+    { include = "trio_redis" },
+]
+
+[tool.poetry.dependencies]
+python = ">=3.7"
+hiredis = "^1.0.1"
+trio = "^0.15.1"
+
+[tool.poetry.dev-dependencies]
+pytest = "^5.4.2"
+flake8 = "^3.8.2"
+flake8-comprehensions = "^3.2.2"
+flake8-fixme = "^1.1.1"
+flake8-quotes = "^3.2.0"
+pytest-cov = "^2.9.0"
+pytest-trio = "^0.6.0"
+coverage = "^4.4.2"
+
+[build-system]
+requires = ["poetry>=0.12"]
+build-backend = "poetry.masonry.api"
