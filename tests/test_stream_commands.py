@@ -235,16 +235,17 @@ async def test_xinfo_groups(redis):
 async def test_xinfo_stream(redis):
     key = 'x'
     await redis.xgroup_create(key, 'group_a', mkstream=True)
-    payload = {b'foo': b'bar'}
-    msgid_1 = await redis.xadd(key, payload)
-    msgid_2 = await redis.xadd(key, payload)
+    payload_1 = {b'foo1': b'bar1'}
+    payload_2 = {b'foo2': b'bar2'}
+    msgid_1 = await redis.xadd(key, payload_1)
+    msgid_2 = await redis.xadd(key, payload_2)
 
     result = await redis.xinfo_stream(key)
 
     assert result == {
-        b'first-entry': (msgid_1, payload),
+        b'first-entry': (msgid_1, payload_1),
         b'groups': 1,
-        b'last-entry': (msgid_2, payload),
+        b'last-entry': (msgid_2, payload_2),
         b'last-generated-id': msgid_2,
         b'length': 2,
         b'radix-tree-keys': 1,
