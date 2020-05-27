@@ -126,7 +126,7 @@ async def _new_redis_server():
             raise
         finally:
             if has_error:
-                logger.error(f'STDERR: ' + (await _drain_stream(proc.stderr)).decode('utf-8'))
+                logger.error('STDERR: ' + (await _drain_stream(proc.stderr)).decode('utf-8'))
             proc.terminate()
             await proc.wait()
 
