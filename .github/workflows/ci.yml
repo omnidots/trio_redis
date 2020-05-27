@@ -13,7 +13,7 @@ jobs:
     runs-on: ${{ matrix.operating-system }}
     services:
       redis:
-        image: redis:5.0.7-alpine3.11
+        image: redis:6.0.3-alpine3.11
         ports:
           - 6379:6379
         options: --entrypoint redis-server
