@@ -9,3 +9,4 @@
   - xdel
   - xtrim
 - Return an empty list when an empty pipeline is awaited.
+- Raise ClosedError when connection is unexpectedly closed.

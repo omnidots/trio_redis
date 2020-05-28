@@ -71,7 +71,10 @@ class Connection:
         replies = []
 
         while True:
-            self._parser.feed(await self._stream.receive_some())
+            data = await self._stream.receive_some()
+            if data == b'':
+                raise ClosedError('connection unexpectedly closed')
+            self._parser.feed(data)
             while True:
                 reply = self._parser.gets()
                 if reply is False:
