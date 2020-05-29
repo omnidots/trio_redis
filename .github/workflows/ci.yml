@@ -13,35 +13,47 @@ jobs:
     runs-on: ${{ matrix.operating-system }}
     services:
       redis:
-        image: redis:5.0.7-alpine3.11
+        image: redis:6.0.3-alpine3.11
         ports:
           - 6379:6379
         options: --entrypoint redis-server
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v2.0.0
+        uses: actions/checkout@v2.1.1
         with:
           fetch-depth: 1
+
       - name: Set up Python ${{ matrix.python-version }}
-        uses: actions/setup-python@v1.1.1
+        uses: actions/setup-python@v2.0.1
         with:
           python-version: ${{ matrix.python-version }}
-      - name: Restore pip cache
-        uses: actions/cache@v1.1.2
+
+      - name: Install Poetry
+        run: |
+          curl -sSL https://raw.githubusercontent.com/python-poetry/poetry/master/get-poetry.py | python
+          echo "::add-path::~/.poetry/bin"
+
+      - name: Cache Poetry environment
+        uses: actions/cache@v2.0.0
+        id: cache
         with:
-          path: ~/.cache/pip
-          key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
+          path: ~/.cache/pypoetry/virtualenvs
+          key: poetry-py${{ matrix.python-version }}-${{ hashFiles('**/poetry.lock') }}
           restore-keys: |
-            ${{ runner.os }}-pip-
+            poetry-py${{ matrix.python-version }}-${{ hashFiles('**/poetry.lock') }}
+
       - name: Install dependencies
         run: |
-          pip install -r requirements.txt
+          poetry install
+        if: steps.cache.outputs.cache-hit != 'true'
+
       - name: Test trio_redis
         env:
           REDIS_HOST: localhost
           REDIS_PORT: ${{ job.services.redis.ports[6379] }}
         run: |
-          pytest --redis-url redis://$REDIS_HOST:$REDIS_PORT --cov-report=term
+          poetry run pytest --redis-url redis://$REDIS_HOST:$REDIS_PORT --cov-report=term
+
       - name: Flake8
         run: |
-          flake8
+          poetry run flake8

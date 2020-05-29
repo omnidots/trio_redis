@@ -45,12 +45,40 @@ def parse_stream_list(reply):
     return data
 
 
+def parse_xinfo_stream(response):
+    data = pairs_to_dict(response)
+
+    for k in (b'first-entry', b'last-entry'):
+        item = data[k]
+        if item is not None:
+            data[k] = (item[0], pairs_to_dict(item[1]))
+
+    return data
+
+
 def pairs_to_dict(reply):
     it = iter(reply)
     return dict(zip(it, it))
 
 
-def parse_xpending(reply):
+def parse_list_of_dicts(reply):
+    return [pairs_to_dict(r) for r in reply]
+
+
+def parse_xpending(response, **options):
+    consumers = [{b'name': n, b'pending': p} for n, p in response[3] or []]
+    return {
+        b'pending': response[0],
+        b'min': response[1],
+        b'max': response[2],
+        b'consumers': consumers
+    }
+
+
+def parse_xpending_range(reply):
+    if not reply:
+        return []
+
     return [
         {
             'message_id': r[0],
@@ -201,15 +229,18 @@ class StreamCommands:
     def xack(self, key, groupname, *ids):
         return self.execute([b'XACK', key, groupname, *ids], int)
 
+    def xpending(self, key, groupname):
+        return self.execute([b'XPENDING', key, groupname], parse_xpending)
+
     def xpending_range(self, key, groupname, start, end, count, consumername=None):
-        # NOTE: The start, end, and count arguments are optional to
-        # XPENDING, but we only user the command with these arguments.
+        # NOTE: The start, end and count arguments are optional to
+        # XPENDING, but we only use the command with these arguments.
         # So they are not optional here.
 
         pieces = [b'XPENDING', key, groupname, start, end, count]
         if consumername is not None:
             pieces.append(consumername)
-        return self.execute(pieces, parse_xpending)
+        return self.execute(pieces, parse_xpending_range)
 
     def xclaim(
         self,
@@ -249,6 +280,24 @@ class StreamCommands:
                 raise ValueError('XRANGE count must be a positive integer')
             pieces.extend([b'COUNT', str(count)])
         return self.execute([b'XRANGE', key, min, max, *pieces], parse_stream_list)
+
+    def xinfo_groups(self, key):
+        return self.execute([b'XINFO', b'GROUPS', key], parse_list_of_dicts)
+
+    def xinfo_stream(self, key):
+        return self.execute([b'XINFO', b'STREAM', key], parse_xinfo_stream)
+
+    def xdel(self, key, *ids):
+        return self.execute([b'XDEL', key, *ids], int)
+
+    def xtrim(self, key, maxlen, approximate=True):
+        pieces = [b'XTRIM', key, b'MAXLEN']
+
+        if approximate:
+            pieces.append(b'~')
+
+        pieces.append(maxlen)
+        return self.execute(pieces, int)
 
 
 class StringCommands:

@@ -3,6 +3,7 @@ import trio
 
 from trio_redis import Redis
 from trio_redis._redis import Pipeline
+from trio_redis.testing_utils import TCPProxy
 
 
 async def test_concurrent_use_of_single_instance(redis):
@@ -84,3 +85,23 @@ async def test_redis_pool_commands(redis_pool):
 async def test_redis_pool_borrow(redis_pool):
     async with redis_pool.borrow() as client:
         await client.set('a', 1)
+
+
+async def test_close_socket(nursery, redis_url):
+    class ProxyUnexpectedClose(TCPProxy):
+        async def handle_request(self, request):
+            if b'GET' in request:
+                raise self.CloseClientConnection
+            return request
+
+    proxy = ProxyUnexpectedClose(redis_url)
+    address = await nursery.start(proxy.run_forever)
+
+    redis = Redis(*address)
+    await redis.connect()
+
+    with pytest.raises(redis.ClosedError, match='connection unexpectedly closed'):
+        await redis.get('x')
+
+    await redis.aclose()
+    nursery.cancel_scope.cancel()

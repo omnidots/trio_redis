@@ -178,7 +178,7 @@ class Redis(_BaseRedis, *_commands):
             parse_callback = _noop
 
         reply = await self._conn.execute(command)
-        reply = self._parse_reply(command[0], reply, parse_callback)
+        reply = self._parse_reply(reply, parse_callback)
         if isinstance(reply, self.ReplyError):
             raise reply
 
@@ -190,13 +190,13 @@ class Redis(_BaseRedis, *_commands):
 
         replies = await self._conn.execute_many(commands)
         replies = [
-            self._parse_reply(command[0], reply, cb)
-            for command, reply, cb in zip(commands, replies, parse_callbacks)
+            self._parse_reply(reply, cb)
+            for reply, cb in zip(replies, parse_callbacks)
         ]
 
         return replies
 
-    def _parse_reply(self, command, reply, parse_callback):
+    def _parse_reply(self, reply, parse_callback):
         if isinstance(reply, hiredis.ReplyError):
             reply = self.ReplyError.from_error_reply(reply)
         else:
@@ -218,6 +218,11 @@ class Pipeline(*_commands):
         return self
 
     def __await__(self):
+        if not self._buffer:
+            async def return_empty_list():
+                return []
+            return return_empty_list().__await__()
+
         return self._redis.execute_many(
             self._buffer,
             self._callbacks,

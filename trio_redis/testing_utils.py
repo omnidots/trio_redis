@@ -8,11 +8,12 @@ import random
 import string
 import subprocess
 from contextlib import asynccontextmanager
+from urllib.parse import urlparse
 
 import pytest
 import trio
 
-from ._redis import Redis, RedisPool
+from ._redis import Redis, RedisPool, DEFAULT_HOST, DEFAULT_PORT
 
 
 logger = logging.getLogger(__name__)
@@ -126,7 +127,7 @@ async def _new_redis_server():
             raise
         finally:
             if has_error:
-                logger.error(f'STDERR: ' + (await _drain_stream(proc.stderr)).decode('utf-8'))
+                logger.error('STDERR: ' + (await _drain_stream(proc.stderr)).decode('utf-8'))
             proc.terminate()
             await proc.wait()
 
@@ -193,3 +194,52 @@ async def fail_if_not_between(after, before, coroutine):
             await trio.sleep(0.001)
 
     assert result
+
+
+class TCPProxy:
+    """A TCP proxy for request-response protocols."""
+
+    def __init__(self, target_address):
+        parsed_url = urlparse(target_address)
+        self.host = parsed_url.hostname or DEFAULT_HOST
+        self.port = parsed_url.port or DEFAULT_PORT
+
+    async def run_forever(self, task_status=trio.TASK_STATUS_IGNORED):
+        async with trio.open_nursery() as nursery:
+            listeners = await nursery.start(trio.serve_tcp, self.handle_client, 0)
+            proxy_address = self._get_address_from_listeners(listeners)
+            task_status.started(proxy_address)
+
+    def _get_address_from_listeners(self, listeners):
+        return listeners[0].socket.getsockname()
+
+    async def handle_client(self, client_stream):
+        target_stream = await trio.open_tcp_stream(self.host, self.port)
+
+        try:
+            while True:
+                # NOTE: We're assuming the requests from the client and
+                # the responses from the server are never bigger than
+                # 64KiB (Trio's default). This assumption makes the code
+                # below much simpler. There's no logic needed to detect
+                # if a request or response is complete.
+                request = await client_stream.receive_some()
+                request = await self.handle_request(request)
+                await target_stream.send_all(request)
+
+                response = await target_stream.receive_some()
+                response = await self.handle_response(response)
+                await client_stream.send_all(response)
+        except self.CloseClientConnection:
+            pass
+        finally:
+            await target_stream.aclose()
+
+    async def handle_request(self, request):
+        return request
+
+    async def handle_response(self, response):
+        return response
+
+    class CloseClientConnection(Exception):
+        pass
