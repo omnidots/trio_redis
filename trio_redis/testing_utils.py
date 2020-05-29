@@ -218,14 +218,15 @@ class TCPProxy:
 
         try:
             while True:
-                # NOTE: We're assuming the requests from then client and
+                # NOTE: We're assuming the requests from the client and
                 # the responses from the server are never bigger than
                 # 64KiB (Trio's default). This assumption makes the code
                 # below much simpler. There's no logic needed to detect
-                # if a request or response it complete.
+                # if a request or response is complete.
                 request = await client_stream.receive_some()
                 request = await self.handle_request(request)
                 await target_stream.send_all(request)
+
                 response = await target_stream.receive_some()
                 response = await self.handle_response(response)
                 await client_stream.send_all(response)
