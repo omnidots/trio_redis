@@ -1,5 +1,9 @@
 # Changelog
 
+**0.2.1:**
+
+- Remove setup.py shim.
+
 **0.2.0:**
 
 - Add API for Redis streams commands:
