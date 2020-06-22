@@ -1,10 +1,18 @@
 # Changelog
 
-**0.2.1:**
+## 0.2.2
+
+- Reset connection (reconnect with Redis) after a call to execute()
+  or execute_many() has been cancelled.
+- Add xread command.
+
+
+## 0.2.1
 
 - Remove setup.py shim.
 
-**0.2.0:**
+
+## 0.2.0
 
 - Add API for Redis streams commands:
   - xpending
