@@ -20,6 +20,8 @@ class Connection:
         self._stream = None
         self._parser = hiredis.Reader()
 
+        self._cleanup_timeout = 5.0
+
     async def connect(self):
         if self._is_connected:
             raise BusyError('already connected')
@@ -36,20 +38,11 @@ class Connection:
             self._is_connected = False
 
     async def execute(self, command):
-        if not self._is_connected:
-            raise ClosedError('cannot execute command, connection is closed')
-        if self._is_busy:
-            raise BusyError('another task is currently executing a command')
-        self._is_busy = True
-
-        try:
-            request = _build_request(command)
-            await self._stream.send_all(request)
-            return (await self._read_reply())[0]
-        finally:
-            self._is_busy = False
+        return (await self.execute_many((command,)))[0]
 
     async def execute_many(self, commands):
+        if not self._is_connected:
+            raise ClosedError('cannot execute command, connection is closed')
         if self._is_busy:
             raise BusyError('another task is currently executing a command')
         self._is_busy = True
@@ -59,6 +52,15 @@ class Connection:
             await self._stream.send_all(request)
             reply = await self._read_reply(expected=len(commands))
             return reply
+        except trio.Cancelled:
+            # If cancelled, reconnect. The old connection might still
+            # receive a reply from Redis and if this connection is
+            # reused it'll get the reply from the previous command.
+            with trio.move_on_after(self._cleanup_timeout) as cleanup_scope:
+                cleanup_scope.shield = True
+                await self.aclose()
+                await self.connect()
+            raise
         finally:
             self._is_busy = False
 
