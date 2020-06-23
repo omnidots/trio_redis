@@ -105,3 +105,37 @@ async def test_close_socket(nursery, redis_url):
 
     await redis.aclose()
     nursery.cancel_scope.cancel()
+
+
+async def test_connection_reset_after_cancelled(redis, redis_url):
+    # NOTE: The redis fixture is needed to cleanup after this test ends.
+
+    reader = Redis.from_url(redis_url)
+    await reader.connect()
+    writer = Redis.from_url(redis_url)
+    await writer.connect()
+
+    async def read():
+        with trio.move_on_after(0.5) as cancel_scope:
+            await reader.xread({'x': '0-0'}, block=5000)
+
+        # Assert that XREAD has been cancelled.
+        assert cancel_scope.cancelled_caught
+
+        # Sleep for a bit. In the meanwhile an XADD is executed.
+        await trio.sleep(0.5)
+
+        # Try to get a value from a non-existing key.
+        # If the connection was not reset we'd get the message which
+        # was added by XADD in the write() function.
+        result = await reader.get('bleep')
+        assert result is None
+
+    async def write():
+        # Sleep until the XREAD is cancelled, then do XADD.
+        await trio.sleep(0.8)
+        await writer.xadd('x', {'a': 1})
+
+    async with trio.open_nursery() as nursery:
+        nursery.start_soon(read)
+        nursery.start_soon(write)

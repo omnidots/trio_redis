@@ -190,6 +190,26 @@ class StreamCommands:
 
         return self.execute(pieces)
 
+    def xread(self, streams, count=None, block=None):
+        pieces = [b'XREAD']
+
+        if count is not None:
+            if not isinstance(count, int) or count < 1:
+                raise ValueError('XREADGROUP count must be a positive integer')
+            pieces.extend([b'COUNT', count])
+
+        if block is not None:
+            if not isinstance(block, int) or block < 0:
+                raise ValueError('XREADGROUP block must be a non-negative '
+                                 'integer')
+            pieces.extend([b'BLOCK', block])
+
+        pieces.append(b'STREAMS')
+        pieces.extend(streams.keys())
+        pieces.extend(streams.values())
+
+        return self.execute(pieces, parse_xread)
+
     def xreadgroup(
         self,
         groupname,
