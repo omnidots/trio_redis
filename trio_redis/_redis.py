@@ -7,6 +7,7 @@ import trio
 
 from . import _errors
 from ._commands import (
+    bool_ok,
     ConnectionCommands,
     KeysCommands,
     ScriptingCommands,
@@ -58,6 +59,9 @@ class _BaseRedis:
 
     def pipeline(self):
         return Pipeline(self)
+
+    def transaction(self):
+        return Transaction(self)
 
 
 class RedisPool(_BaseRedis, *_commands):
@@ -227,6 +231,26 @@ class Pipeline(*_commands):
             self._buffer,
             self._callbacks,
         ).__await__()
+
+
+class Transaction(Pipeline):
+    def _parse_exec(self, values):
+        if len(self._callbacks) != len(values):
+            raise ValueError('number of callbacks and values are not the same!')
+        return [c(v) for c, v in zip(self._callbacks, values)]
+
+    def _parse_queued(self, value):
+        if value != b'QUEUED':
+            raise ValueError('command was not queued')
+
+    def __await__(self):
+        b = [[b'MULTI'], *self._buffer, [b'EXEC']]
+        c = [bool_ok, *([self._parse_queued] * len(self._callbacks)), self._parse_exec]
+
+        async def execute():
+            return (await self._redis.execute_many(b, c))[-1]
+
+        return execute().__await__()
 
 
 def _parse_url(url):

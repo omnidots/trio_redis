@@ -57,6 +57,17 @@ async def test_pipeline(redis):
     assert result == [True, b'y', True, b'z', True, b'a']
 
 
+async def test_transaction(redis):
+    transaction = (redis.transaction()
+        .get('x')
+        .set('x', 'y')
+        .get('x'))
+
+    result = await transaction
+
+    assert result == [None, True, b'y']
+
+
 async def test_redis_pool_acquire_release(redis_pool):
     c1 = await redis_pool.acquire()
     assert c1 not in redis_pool._free
