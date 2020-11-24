@@ -19,7 +19,7 @@ from ._redis import Redis, RedisPool, DEFAULT_HOST, DEFAULT_PORT
 logger = logging.getLogger(__name__)
 
 
-DEFAULT_REDIS_IMAGE = 'redis:5.0.7-alpine3.11'
+DEFAULT_REDIS_IMAGE = 'redis:6.0.9-alpine3.12'
 DEFAULT_REDIS_URL = 'redis://localhost'
 
 

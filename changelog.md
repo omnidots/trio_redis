@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.2.3
+
+- Replace Poetry with Setuptools.
+
+
 ## 0.2.2
 
 - Reset connection (reconnect with Redis) after a call to execute()
