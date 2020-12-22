@@ -1,1 +1,1 @@
-from ._redis import Redis, RedisPool  # noqa: F401
+from ._redis import Redis, RedisPool, RedisCluster  # noqa: F401

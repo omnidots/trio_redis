@@ -3,6 +3,7 @@
 
 
 from functools import partial
+from io import BytesIO
 
 
 __all__ = [
@@ -98,6 +99,34 @@ def parse_zadd(reply, as_score=False):
     return int(reply)
 
 
+def parse_cluster_nodes(reply):
+    nodes = []
+
+    for row in BytesIO(reply):
+        values = row.split(b' ')
+        nodes.append({
+            'id': values[0],
+            'address': values[1],  # TODO: Parse address
+            'flags': [f.decode('utf-8') for f in values[2].split(b',')],
+            'master': values[3],
+            'ping_sent': int(values[4]),
+            'pong_recv': int(values[5]),
+            'config_epoch': int(values[6]),
+            'link_state': values[7].rstrip(b'\n'),
+            'slots': [[int(n) for n in s.split(b'-')] for s in values[8:]],
+        })
+
+    return nodes
+
+
+class ClusterCommands:
+    def nodes(self):
+        return self.execute([b'CLUSTER', b'NODES'], parse_cluster_nodes)
+
+    def slots(self):
+        return self.execute([b'CLUSTER', b'SLOTS'])
+
+
 class ConnectionCommands:
     def select(self, index):
         return self.execute([b'SELECT', index])
@@ -105,10 +134,10 @@ class ConnectionCommands:
 
 class KeysCommands:
     def exists(self, *keys):
-        return self.execute([b'EXISTS', *keys])
+        return self.execute([b'EXISTS', *keys], keys=keys)
 
     def pttl(self, key):
-        return self.execute([b'PTTL', key])
+        return self.execute([b'PTTL', key], key=key)
 
     def keys(self, pattern='*'):
         return self.execute([b'KEYS', pattern])
@@ -116,10 +145,10 @@ class KeysCommands:
 
 class ScriptingCommands:
     def eval(self, script, keys=[], args=[]):
-        return self.execute([b'EVAL', script, len(keys), *keys, *args])
+        return self.execute([b'EVAL', script, len(keys), *keys, *args], keys=keys)
 
     def evalsha(self, sha1, keys=[], args=[]):
-        return self.execute([b'EVALSHA', sha1, len(keys), *keys, *args])
+        return self.execute([b'EVALSHA', sha1, len(keys), *keys, *args], keys=keys)
 
     def script_load(self, script):
         return self.execute([b'SCRIPT', b'LOAD', script])
@@ -133,7 +162,7 @@ class ScriptingCommands:
 
 class ServerCommands:
     def flushdb(self):
-        return self.execute((b'FLUSHDB',))
+        return self.execute([b'FLUSHDB'])
 
 
 class SortedSetCommands:
@@ -163,10 +192,10 @@ class SortedSetCommands:
         for pair in mapping:
             pieces.extend([pair[1], pair[0]])
 
-        return self.execute(pieces, partial(parse_zadd, as_score=as_score))
+        return self.execute(pieces, partial(parse_zadd, as_score=as_score), key=key)
 
     def zcount(self, key, min='-inf', max='+inf'):
-        return self.execute([b'ZCOUNT', key, min, max])
+        return self.execute([b'ZCOUNT', key, min, max], key=key)
 
 
 class StreamCommands:
@@ -188,7 +217,7 @@ class StreamCommands:
         for pair in fields.items():
             pieces.extend(pair)
 
-        return self.execute(pieces)
+        return self.execute(pieces, key=key)
 
     def xread(self, streams, count=None, block=None):
         pieces = [b'XREAD']
@@ -208,7 +237,7 @@ class StreamCommands:
         pieces.extend(streams.keys())
         pieces.extend(streams.values())
 
-        return self.execute(pieces, parse_xread)
+        return self.execute(pieces, parse_xread, keys=streams.keys())
 
     def xreadgroup(
         self,
@@ -238,19 +267,19 @@ class StreamCommands:
         pieces.extend(streams.keys())
         pieces.extend(streams.values())
 
-        return self.execute(pieces, parse_xread)
+        return self.execute(pieces, parse_xread, keys=streams.keys())
 
     def xgroup_create(self, key, groupname, id=b'$', mkstream=False):
         pieces = [b'XGROUP', b'CREATE', key, groupname, id]
         if mkstream:
             pieces.append(b'MKSTREAM')
-        return self.execute(pieces, bool_ok)
+        return self.execute(pieces, bool_ok, key=key)
 
     def xack(self, key, groupname, *ids):
-        return self.execute([b'XACK', key, groupname, *ids], int)
+        return self.execute([b'XACK', key, groupname, *ids], int, key=key)
 
     def xpending(self, key, groupname):
-        return self.execute([b'XPENDING', key, groupname], parse_xpending)
+        return self.execute([b'XPENDING', key, groupname], parse_xpending, key=key)
 
     def xpending_range(self, key, groupname, start, end, count, consumername=None):
         # NOTE: The start, end and count arguments are optional to
@@ -260,7 +289,8 @@ class StreamCommands:
         pieces = [b'XPENDING', key, groupname, start, end, count]
         if consumername is not None:
             pieces.append(consumername)
-        return self.execute(pieces, parse_xpending_range)
+
+        return self.execute(pieces, parse_xpending_range, key=key)
 
     def xclaim(
         self,
@@ -288,10 +318,10 @@ class StreamCommands:
             consumername,
             min_idle_time,
             *message_ids
-        ], parse_stream_list)
+        ], parse_stream_list, key=key)
 
     def xlen(self, key):
-        return self.execute([b'XLEN', key], int)
+        return self.execute([b'XLEN', key], int, key=key)
 
     def xrange(self, key, min='-', max='+', count=None):
         pieces = []
@@ -299,16 +329,16 @@ class StreamCommands:
             if not isinstance(count, int) or count < 1:
                 raise ValueError('XRANGE count must be a positive integer')
             pieces.extend([b'COUNT', str(count)])
-        return self.execute([b'XRANGE', key, min, max, *pieces], parse_stream_list)
+        return self.execute([b'XRANGE', key, min, max, *pieces], parse_stream_list, key=key)
 
     def xinfo_groups(self, key):
-        return self.execute([b'XINFO', b'GROUPS', key], parse_list_of_dicts)
+        return self.execute([b'XINFO', b'GROUPS', key], parse_list_of_dicts, key=key)
 
     def xinfo_stream(self, key):
-        return self.execute([b'XINFO', b'STREAM', key], parse_xinfo_stream)
+        return self.execute([b'XINFO', b'STREAM', key], parse_xinfo_stream, key=key)
 
     def xdel(self, key, *ids):
-        return self.execute([b'XDEL', key, *ids], int)
+        return self.execute([b'XDEL', key, *ids], int, key=key)
 
     def xtrim(self, key, maxlen, approximate=True):
         pieces = [b'XTRIM', key, b'MAXLEN']
@@ -317,7 +347,7 @@ class StreamCommands:
             pieces.append(b'~')
 
         pieces.append(maxlen)
-        return self.execute(pieces, int)
+        return self.execute(pieces, int, key=key)
 
 
 class StringCommands:
@@ -334,7 +364,12 @@ class StringCommands:
         if xx:
             pieces.append(b'XX')
 
-        return self.execute(pieces, bool_ok)
+        return self.execute(pieces, bool_ok, key=key)
 
     def get(self, key):
-        return self.execute([b'GET', key])
+        return self.execute([b'GET', key], key=key)
+
+
+class DisableSelectCommand:
+    def select(self, *args, **kwargs):
+        raise NotImplementedError('select is disabled')

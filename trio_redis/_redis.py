@@ -1,5 +1,8 @@
+from binascii import crc_hqx
+from bisect import bisect
 from contextlib import asynccontextmanager
 from itertools import repeat
+from random import randrange
 from urllib.parse import urlparse, parse_qs
 
 import hiredis
@@ -7,6 +10,7 @@ import trio
 
 from . import _errors
 from ._commands import (
+    ClusterCommands,
     ConnectionCommands,
     KeysCommands,
     ScriptingCommands,
@@ -14,6 +18,7 @@ from ._commands import (
     SortedSetCommands,
     StreamCommands,
     StringCommands,
+    DisableSelectCommand,
 )
 from ._connection import Connection
 
@@ -25,6 +30,7 @@ __all__ = [
 
 
 _commands = (
+    ClusterCommands,
     ConnectionCommands,
     KeysCommands,
     ScriptingCommands,
@@ -38,6 +44,8 @@ _commands = (
 DEFAULT_HOST = 'localhost'
 DEFAULT_PORT = 6379
 DEFAULT_DB = 0
+
+AVAILABLE_CLUSTER_SLOTS = 16384
 
 
 class _BaseRedis:
@@ -60,7 +68,7 @@ class _BaseRedis:
         return Pipeline(self)
 
 
-class RedisPool(_BaseRedis, *_commands):
+class RedisPool(_BaseRedis, DisableSelectCommand, *_commands):
     """A pool of Redis clients.
 
     It's not needed to explicitly borrow a client from the pool. All
@@ -125,6 +133,7 @@ class RedisPool(_BaseRedis, *_commands):
         self._not_free.remove(client)
         self._free.append(client)
         self._limit.release()
+        # TODO: Cleanup old connections.
 
     @asynccontextmanager
     async def borrow(self):
@@ -143,22 +152,19 @@ class RedisPool(_BaseRedis, *_commands):
         finally:
             await self.release(client)
 
-    async def execute(self, command, parse_callback=None):
+    async def execute(self, command, parse_callback=None, **kwargs):
         client = await self.acquire()
         try:
-            return await client.execute(command, parse_callback)
+            return await client.execute(command, parse_callback, **kwargs)
         finally:
             await self.release(client)
 
-    async def execute_many(self, commands, parse_callbacks=None):
+    async def execute_many(self, commands, parse_callbacks=None, multi_kwargs=None):
         client = await self.acquire()
         try:
-            return await client.execute_many(commands, parse_callbacks)
+            return await client.execute_many(commands, parse_callbacks, multi_kwargs)
         finally:
             await self.release(client)
-
-    def select(self, index):
-        raise NotImplementedError('SELECT not implemented for RedisPool')
 
 
 class Redis(_BaseRedis, *_commands):
@@ -173,7 +179,7 @@ class Redis(_BaseRedis, *_commands):
     async def aclose(self):
         await self._conn.aclose()
 
-    async def execute(self, command, parse_callback=None):
+    async def execute(self, command, parse_callback=None, **kwargs):
         if not parse_callback:
             parse_callback = _noop
 
@@ -184,24 +190,110 @@ class Redis(_BaseRedis, *_commands):
 
         return reply
 
-    async def execute_many(self, commands, parse_callbacks=None):
+    async def execute_many(self, commands, parse_callbacks=None, multi_kwargs=None):
         if not parse_callbacks:
             parse_callbacks = repeat(_noop)
 
         replies = await self._conn.execute_many(commands)
         replies = [
-            self._parse_reply(reply, cb)
-            for reply, cb in zip(replies, parse_callbacks)
+            self._parse_reply(reply, cb, **kwargs)
+            for reply, cb, kwargs in zip(replies, parse_callbacks, multi_kwargs)
         ]
 
         return replies
 
+    # FIXME: Should this be in Redis?
     def _parse_reply(self, reply, parse_callback):
         if isinstance(reply, hiredis.ReplyError):
-            reply = self.ReplyError.from_error_reply(reply)
+            reply = _errors.create_error_from_reply(reply)
         else:
             reply = parse_callback(reply)
         return reply
+
+
+class RedisCluster(_BaseRedis, *_commands):
+    ClusterStartupError = _errors.ClusterStartupError
+
+    def __init__(self, startup_nodes):
+        self.startup_nodes = startup_nodes
+        self.slots = []
+        self.masters = []
+        self.clients = {}
+
+    async def connect(self):
+        client = await self._startup_client()
+        try:
+            await self._update_routes(client)
+        finally:
+            await client.aclose()
+
+    async def _update_routes(self, client):
+        slots = []
+        masters = []
+        clients = {}
+
+        for entry in (await client.slots()):
+            high, master, slaves = entry[1], entry[2], entry[3:]
+            master = tuple(master)
+            idx = bisect(slots, high)
+            slots.insert(idx, high)
+            masters.insert(idx, master)
+            # FIXME: Reuse existing connections!
+            client = RedisPool(master[0], master[1])
+            await client.connect()
+            clients[master] = client
+
+        # FIXME: Concurrency bugs.
+        old_clients = self.clients.copy()
+        self.slots = slots
+        self.masters = masters
+        self.clients = clients
+
+        for client in old_clients.values():
+            await client.aclose()
+
+    async def _startup_client(self):
+        for url in self.startup_nodes:
+            client = Redis.from_url(url)
+            try:
+                await client.connect()
+                return client
+            except OSError:
+                pass
+
+        raise _errors.ClusterStartupError
+
+    async def execute(self, command, parse_callback=None, key=None, keys=None):
+        slot = self._determine_slot(key, keys)
+
+        # TODO:
+        # - Handle ask.
+        # - Limit amount of tries.
+
+        while True:
+            master = self.masters[bisect(self.slots, slot)]
+            client = self.clients[master]
+            try:
+                return await client.execute(command, parse_callback)
+            except _errors.ClusterSlotMoved:
+                await self._update_routes(client)
+
+    def _determine_slot(self, key=None, keys=None):
+        slot = None
+
+        if key is not None:
+            slot = hashslot(key)
+        elif keys is not None:
+            for k in keys:
+                new_slot = hashslot(k)
+                if new_slot != slot:
+                    raise ValueError('all keys must resolve to the same slot')
+                slot = new_slot
+
+        if slot is None:
+            slot = randrange(0, AVAILABLE_CLUSTER_SLOTS)
+
+        return slot
 
 
 class Pipeline(*_commands):
@@ -210,7 +302,7 @@ class Pipeline(*_commands):
         self._buffer = []
         self._callbacks = []
 
-    def execute(self, command, parse_callback=None):
+    def execute(self, command, parse_callback=None, **kwargs):
         if not parse_callback:
             parse_callback = _noop
         self._buffer.append(command)
@@ -229,6 +321,7 @@ class Pipeline(*_commands):
         ).__await__()
 
 
+# FIXME: Accept /<db> not ?db=<db?
 def _parse_url(url):
     """Parse a Redis URL.
 
@@ -264,6 +357,18 @@ def _parse_url(url):
     kwargs.update(params)
 
     return kwargs
+
+
+def hashslot(key):
+    if not isinstance(key, bytes):
+        key = key.encode('utf-8')
+
+    s = key.find(b'{')
+    if s != -1:
+        e = key.find(b'}')
+        if e > s + 1:
+            key = key[s + 1 : e]
+    return crc_hqx(key, 0) % AVAILABLE_CLUSTER_SLOTS
 
 
 def _noop(value):
