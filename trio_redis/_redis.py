@@ -193,6 +193,8 @@ class Redis(_BaseRedis, *_commands):
     async def execute_many(self, commands, parse_callbacks=None, multi_kwargs=None):
         if not parse_callbacks:
             parse_callbacks = repeat(_noop)
+        if not multi_kwargs:
+            multi_kwargs = repeat({})
 
         replies = await self._conn.execute_many(commands)
         replies = [
