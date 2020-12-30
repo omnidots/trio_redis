@@ -242,7 +242,7 @@ class RedisCluster(_BaseRedis, *_commands):
         clients = {}
 
         for entry in (await client.slots()):
-            high, master, slaves = entry[1], entry[2], entry[3:]
+            high, master = entry[1], entry[2]
             master = tuple(master)
             idx = bisect(slots, high)
             slots.insert(idx, high)
@@ -376,7 +376,7 @@ def hashslot(key):
     if s != -1:
         e = key.find(b'}')
         if e > s + 1:
-            key = key[s + 1 : e]
+            key = key[s + 1:e]
     return crc_hqx(key, 0) % AVAILABLE_CLUSTER_SLOTS
 
 

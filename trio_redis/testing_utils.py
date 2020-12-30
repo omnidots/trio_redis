@@ -327,7 +327,7 @@ class ClusterManager:
         }
         async with await trio.open_process(**kwargs) as proc:
             while proc.returncode is None:
-                self.logger.debug(await proc.stdout.receive_some())
+                self.logger.debug((await proc.stdout.receive_some()).decode('utf-8'))
             if proc.returncode > 0:
                 raise OSError(f'redis-cli exited with {proc.returncode}')
 

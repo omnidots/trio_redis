@@ -1,7 +1,6 @@
 coverage
 flake8
 flake8-comprehensions
-flake8-fixme
 flake8-quotes
 pytest
 pytest-cov
