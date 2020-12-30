@@ -229,6 +229,13 @@ class RedisCluster(_BaseRedis, *_commands):
         finally:
             await client.aclose()
 
+    async def aclose(self):
+        for client in self.clients.values():
+            await client.aclose()
+        self.slots = []
+        self.masters = []
+        self.clients = {}
+
     async def _update_routes(self, client):
         slots = []
         masters = []

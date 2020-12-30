@@ -3,11 +3,14 @@ Testing utilities for trio_redis.
 """
 
 import logging
-import re
 import random
+import re
+import shutil
 import string
 import subprocess
+import tempfile
 from contextlib import asynccontextmanager
+from pathlib import Path
 from urllib.parse import urlparse
 
 import pytest
@@ -24,6 +27,14 @@ DEFAULT_REDIS_URL = 'redis://localhost'
 
 
 _RE_DOCKER_PORT_MAPPING = re.compile(b'\\d+/tcp -> .*?:(?P<host_port>\\d+)')
+
+_CLUSTER_CONFIG_TEMPLATE = """\
+port {port}
+cluster-enabled yes
+cluster-config-file nodes.conf
+cluster-node-timeout 5000
+appendonly yes
+"""
 
 
 def pytest_addoption(parser):
@@ -52,6 +63,14 @@ async def redis_server(request):
             yield docker_redis_url
     else:
         yield None
+
+
+@pytest.fixture(scope='function')
+async def redis_cluster(request):
+    default_node_count = 6
+
+    async with new_redis_cluster(default_node_count) as urls:
+        yield urls
 
 
 @pytest.fixture(scope='function')
@@ -101,6 +120,19 @@ async def _new_x(cls, url):
 
 
 @asynccontextmanager
+async def new_redis_cluster(node_count):
+    start_port = 7000
+    end_port = start_port + node_count
+    cm = ClusterManager(list(range(start_port, end_port)))
+
+    try:
+        await cm.start()
+        yield cm.nodes()
+    finally:
+        await cm.stop()
+
+
+@asynccontextmanager
 async def _new_redis_server():
     container_name = _redis_container_name()
     kwargs = {
@@ -114,7 +146,7 @@ async def _new_redis_server():
 
         try:
             while True:
-                if proc.poll() is not None:
+                if proc.returncode is not None:
                     raise RuntimeError('Redis server exited')
                 stdout = await proc.stdout.receive_some()
                 if b'Ready to accept connections' in stdout:
@@ -243,3 +275,115 @@ class TCPProxy:
 
     class CloseClientConnection(Exception):
         pass
+
+
+class ClusterManager:
+    def __init__(self, ports):
+        self.ports = map(str, ports)
+        self.logger = get_class_logger(self.__class__)
+        self._procs = []
+        self._tmp = None
+
+    async def start(self):
+        self._tmp = Path(tempfile.mkdtemp())
+
+        try:
+            for port in self.ports:
+                node_path = (self._tmp / port)
+                self._create_node_config(node_path, port)
+                self._procs.append(_RedisNodeProcess(node_path, port))
+
+            async with trio.open_nursery() as nursery:
+                for p in self._procs:
+                    nursery.start_soon(p.open)
+
+            await self._create_cluster()
+        except Exception:
+            await self.stop()
+            raise
+
+    async def stop(self):
+        async with trio.open_nursery() as nursery:
+            for p in self._procs:
+                nursery.start_soon(p.terminate)
+        self._procs = []
+        shutil.rmtree(self._tmp)
+
+    def _create_node_config(self, node_path, port):
+        node_path.mkdir()
+        config_path = node_path / 'redis.conf'
+        config_path.write_text(_CLUSTER_CONFIG_TEMPLATE.format(port=port))
+
+    async def _create_cluster(self):
+        kwargs = {
+            'command': [
+                'redis-cli',
+                '--cluster', 'create',
+                '--cluster-replicas', '1',
+                '--cluster-yes',
+            ] + [p.addr for p in self._procs],
+            'stdout': subprocess.PIPE,
+            'stderr': subprocess.STDOUT,
+        }
+        async with await trio.open_process(**kwargs) as proc:
+            while proc.returncode is None:
+                self.logger.debug(await proc.stdout.receive_some())
+            if proc.returncode > 0:
+                raise OSError(f'redis-cli exited with {proc.returncode}')
+
+    def nodes(self):
+        return [p.url for p in self._procs]
+
+
+class _RedisNodeProcess:
+    def __init__(self, cwd, port):
+        self._proc = None
+        self._kwargs = {
+            'command': [
+                'redis-server',
+                './redis.conf',
+                '--loglevel', 'verbose',
+            ],
+            'stdout': subprocess.PIPE,
+            'stderr': subprocess.STDOUT,
+            'cwd': str(cwd),
+        }
+
+        self.stdout = None
+        self.stderr = None
+
+        self.host = '127.0.0.1'
+        self.port = port
+        self.addr = f'{self.host}:{self.port}'
+        self.url = f'redis://{self.addr}'
+
+    async def open(self):
+        self.stdout = None
+        self.stderr = None
+
+        try:
+            self._proc = await trio.open_process(**self._kwargs)
+            while True:
+                if self._proc.returncode is not None:
+                    raise OSError(f'redis-server exited with {self._proc.returncode}')
+                stdout = await self._proc.stdout.receive_some()
+                if b'Ready to accept connections' in stdout:
+                    break
+        except Exception:
+            await self.terminate()
+            raise
+
+    async def terminate(self):
+        if self._proc is None:
+            return
+        self._proc.terminate()
+        await self._proc.wait()
+        self.stdout = await self._drain(self._proc.stdout)
+        self._proc = None
+
+    async def _drain(self, stream):
+        return (await _drain_stream(stream)).decode('utf-8')
+
+
+def get_class_logger(cls):
+    return logging.getLogger(f'{cls.__module__}.{cls.__name__}')
