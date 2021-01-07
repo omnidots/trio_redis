@@ -68,9 +68,8 @@ async def redis_server(request):
 @pytest.fixture(scope='function')
 async def redis_cluster(request):
     default_node_count = 6
-
-    async with new_redis_cluster(default_node_count) as urls:
-        yield urls
+    async with new_redis_cluster(default_node_count) as rc:
+        yield rc
 
 
 @pytest.fixture(scope='function')
@@ -127,7 +126,7 @@ async def new_redis_cluster(node_count):
 
     try:
         await cm.start()
-        yield cm.nodes()
+        yield cm
     finally:
         await cm.stop()
 

@@ -15,6 +15,8 @@ def create_error_from_reply(obj):
 
     if msg.startswith('MOVED'):
         err = ClusterSlotMoved
+    elif msg.startswith('ASK'):
+        err = ClusterSlotMigrating
     else:
         err = ReplyError
 
@@ -26,4 +28,8 @@ class ReplyError(Exception):
 
 
 class ClusterSlotMoved(ReplyError):
+    pass
+
+
+class ClusterSlotMigrating(ReplyError):
     pass

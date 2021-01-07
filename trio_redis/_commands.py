@@ -126,6 +126,9 @@ class ClusterCommands:
     def slots(self):
         return self.execute([b'CLUSTER', b'SLOTS'])
 
+    def cluster_set_slot(self):
+        pass
+
 
 class ConnectionCommands:
     def select(self, index):

@@ -276,7 +276,7 @@ class RedisCluster(_BaseRedis, *_commands):
         slot = self._determine_slot(key, keys)
 
         # TODO:
-        # - Handle ask.
+        # - Handle ask. WIP
         # - Limit amount of tries.
 
         while True:
@@ -286,6 +286,8 @@ class RedisCluster(_BaseRedis, *_commands):
                 return await client.execute(command, parse_callback)
             except _errors.ClusterSlotMoved:
                 await self._update_routes(client)
+            except _errors.ClusterSlotMigrating:
+                command = [b'ASKING'] + command
 
     def _determine_slot(self, key=None, keys=None):
         slot = None
