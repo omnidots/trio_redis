@@ -131,6 +131,29 @@ class ScriptingCommands:
         return self.execute([b'SCRIPT', b'EXISTS', *sha1], parse_int_bool_list)
 
 
+class SentinelCommands:
+    """TODO
+    See: https://redis.io/topics/sentinel#sentinel-commands
+    """
+    def get_master_addr_by_name(self, master_name):
+        return self.execute([b'SENTINEL', b'GET-MASTER-ADDR-BY-NAME', master_name])
+
+    def master(self, master_name):
+        return self.execute([b'SENTINEL', b'MASTER', master_name], pairs_to_dict)
+
+    def masters(self):
+        return self.execute([b'SENTINEL', b'MASTERS'])
+
+    def myid(self):
+        return self.execute([b'SENTINEL', b'MYID'])
+
+    def replicas(self, master_name):
+        return self.execute([b'SENTINEL', b'REPLICAS', master_name])
+
+    def sentinels(self, master_name):
+        return self.execute([b'SENTINEL', b'SENTINELS', master_name])
+
+
 class ServerCommands:
     def flushdb(self):
         return self.execute((b'FLUSHDB',))

@@ -22,6 +22,9 @@ class Connection:
 
         self._cleanup_timeout = 5.0
 
+    def __repr__(self):
+        return f'<{self.__class__.__name__}: {self.host}:{self.port}>'
+
     async def connect(self):
         if self._is_connected:
             raise BusyError('already connected')

@@ -10,6 +10,7 @@ from ._commands import (
     ConnectionCommands,
     KeysCommands,
     ScriptingCommands,
+    SentinelCommands,
     ServerCommands,
     SortedSetCommands,
     StreamCommands,
@@ -161,7 +162,7 @@ class RedisPool(_BaseRedis, *_commands):
         raise NotImplementedError('SELECT not implemented for RedisPool')
 
 
-class Redis(_BaseRedis, *_commands):
+class _BareRedis(_BaseRedis):
     def __init__(self, host=None, port=None, db=None):
         super().__init__(host, port, db)
         self._conn = Connection(self.host, self.port)
@@ -204,6 +205,50 @@ class Redis(_BaseRedis, *_commands):
         return reply
 
 
+class Redis(_BareRedis, *_commands):
+    pass
+
+
+class Sentinel(_BareRedis, SentinelCommands):
+    CONNECT_TRY_TIMEOUT = 0.5
+
+    @classmethod
+    def from_url(cls, urls):
+        args = []
+
+        for url in urls:
+            tmp = _parse_url(url)
+            if 'db' in tmp:
+                raise ValueError('sentinal client does not support db selection')
+            args.append(tmp)
+
+        return cls(args)
+
+    def __init__(self, addresses):
+        # NOTE: super().__init__(...) not called on purpose.
+        # A custom initialization is done here.
+        self._connections = [Connection(**addr) for addr in addresses]
+        self._conn = None
+
+    async def connect(self):
+        for conn in self._connections[:]:
+            with trio.move_on_after(self.CONNECT_TRY_TIMEOUT) as cancel_scope:
+                try:
+                    await conn.connect()
+                except Exception:
+                    continue
+
+            if not cancel_scope.cancel_caught:
+                self._connections.remove(conn)
+                self._connections.insert(0, conn)
+                self._conn = conn
+                break
+
+    async def aclose(self):
+        await super().aclose()
+        self._conn = None
+
+
 class Pipeline(*_commands):
     def __init__(self, redis):
         self._redis = redis
@@ -241,7 +286,6 @@ def _parse_url(url):
     kwargs = {
         'host': DEFAULT_HOST,
         'port': DEFAULT_PORT,
-        'db': DEFAULT_DB,
     }
 
     url = urlparse(url)
