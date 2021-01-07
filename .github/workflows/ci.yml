@@ -8,20 +8,26 @@ jobs:
     strategy:
       max-parallel: 4
       matrix:
-        operating-system: [ubuntu-latest]
+        operating-system: ['ubuntu-20.04']
         python-version: ['3.7', '3.8', '3.9']
     runs-on: ${{ matrix.operating-system }}
-    services:
-      redis:
-        image: redis:6.0.9-alpine3.12
-        ports:
-          - 6379:6379
-        options: --entrypoint redis-server
     steps:
       - name: Checkout repository
         uses: actions/checkout@v2.3.4
         with:
           fetch-depth: 1
+
+      - name: Install redis-server
+        run: |
+          sudo apt-get install curl
+          sudo sh -c 'echo "deb http://ppa.launchpad.net/redislabs/redis/ubuntu focal main" > /etc/apt/sources.list.d/redislabs-ubuntu-redis.list'
+          curl -sL 'https://keyserver.ubuntu.com/pks/lookup?op=get&search=0xCC59E6B43FA6E3CA' | sudo apt-key add
+          sudo apt update
+          # Prevent daemons from being started. See: https://serverfault.com/a/873827
+          sudo sh -c 'echo exit 101 > /usr/sbin/policy-rc.d'
+          sudo chmod +x /usr/sbin/policy-rc.d
+          sudo apt-get install -yf redis
+          sudo rm -f /usr/sbin/policy-rc.d
 
       - name: Set up Python ${{ matrix.python-version }}
         uses: actions/setup-python@v2.1.4
@@ -48,7 +54,7 @@ jobs:
           REDIS_HOST: localhost
           REDIS_PORT: ${{ job.services.redis.ports[6379] }}
         run: |
-          python -m pytest --redis-url redis://$REDIS_HOST:$REDIS_PORT --cov-report=term tests/
+          python -m pytest --local-redis --log-cli-level=DEBUG --cov-report=term tests/
 
       - name: Flake8
         run: |

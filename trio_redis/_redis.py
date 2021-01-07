@@ -10,6 +10,7 @@ from ._commands import (
     ConnectionCommands,
     KeysCommands,
     ScriptingCommands,
+    SentinelCommands,
     ServerCommands,
     SortedSetCommands,
     StreamCommands,
@@ -21,6 +22,7 @@ from ._connection import Connection
 __all__ = [
     'Redis',
     'RedisPool',
+    'RedisSentinel',
 ]
 
 
@@ -37,14 +39,16 @@ _commands = (
 
 DEFAULT_HOST = 'localhost'
 DEFAULT_PORT = 6379
-DEFAULT_DB = 0
 
 
 class _BaseRedis:
+    """Abstract class for Redis clients."""
     # Alias exceptions. No need to import them. :)
+    ConnectError = _errors.ConnectError
     BusyError = _errors.BusyError
     ClosedError = _errors.ClosedError
     ReplyError = _errors.ReplyError
+    ReadOnlyError = _errors.ReadOnlyError
 
     @classmethod
     def from_url(cls, url):
@@ -54,10 +58,50 @@ class _BaseRedis:
     def __init__(self, host=None, port=None, db=None):
         self.host = host or DEFAULT_HOST
         self.port = DEFAULT_PORT if port is None else port
-        self.db = DEFAULT_DB if db is None else db
+        self.db = db
 
     def pipeline(self):
         return Pipeline(self)
+
+    async def execute(self, command, parse_callback=None):
+        return (await self.execute_many([command], [parse_callback or _noop]))[0]
+
+    async def execute_many(self, commands, parse_callbacks=None):
+        raise NotImplementedError('please implement this')
+
+
+class _BareRedis(_BaseRedis):
+    """Redis client w/o command methods."""
+    def __init__(self, host=None, port=None, db=None):
+        super().__init__(host, port, db)
+        self._conn = Connection(self.host, self.port)
+
+    async def connect(self):
+        await self._conn.connect()
+        if self.db is not None:
+            await self.select(self.db)
+
+    async def aclose(self):
+        await self._conn.aclose()
+
+    async def execute_many(self, commands, parse_callbacks=None):
+        if not parse_callbacks:
+            parse_callbacks = repeat(_noop)
+
+        replies = await self._conn.execute_many(commands)
+        replies = [
+            self._parse_reply(reply, cb)
+            for reply, cb in zip(replies, parse_callbacks)
+        ]
+
+        return replies
+
+    def _parse_reply(self, reply, parse_callback):
+        if isinstance(reply, hiredis.ReplyError):
+            reply = _errors.create_error_from_reply(reply)
+        else:
+            reply = parse_callback(reply)
+        return reply
 
 
 class RedisPool(_BaseRedis, *_commands):
@@ -143,13 +187,6 @@ class RedisPool(_BaseRedis, *_commands):
         finally:
             await self.release(client)
 
-    async def execute(self, command, parse_callback=None):
-        client = await self.acquire()
-        try:
-            return await client.execute(command, parse_callback)
-        finally:
-            await self.release(client)
-
     async def execute_many(self, commands, parse_callbacks=None):
         client = await self.acquire()
         try:
@@ -161,50 +198,135 @@ class RedisPool(_BaseRedis, *_commands):
         raise NotImplementedError('SELECT not implemented for RedisPool')
 
 
-class Redis(_BaseRedis, *_commands):
-    def __init__(self, host=None, port=None, db=None):
-        super().__init__(host, port, db)
-        self._conn = Connection(self.host, self.port)
+class Redis(_BareRedis, *_commands):
+    """Basic Redis client."""
+
+
+class RedisSentinel(Redis):
+    """Basic Redis client with Sentinel support."""
+    RECONNECT_DELAY = 0.5  # Seconds.
+    RECONNECT_DELAY_INCREASE = 1.5  # Multiplier.
+    MAX_RECONNECT_TRIES = 10
+
+    @classmethod
+    def from_url(cls, master_name, urls):
+        adresses = []
+
+        for url in urls:
+            tmp = _parse_url(url)
+            adresses.append((tmp['host'], tmp['port']))
+
+        return cls(master_name, adresses)
+
+    def __init__(self, master_name, adresses):
+        self.master_name = master_name
+        self.sentinel = Sentinel(adresses)
+        super().__init__()
 
     async def connect(self):
-        await self._conn.connect()
-        await self.select(self.db)
+        addr = await self._get_current_master_addr()
+        self.host = self._conn.host = addr[0]
+        self.port = self._conn.port = addr[1]
+        await super().connect()
 
-    async def aclose(self):
-        await self._conn.aclose()
+    async def _reconnect(self):
+        if self._conn._is_connected:
+            await self._conn.aclose()
+        self._conn = Connection(None, None)
+        await self.connect()
 
-    async def execute(self, command, parse_callback=None):
-        if not parse_callback:
-            parse_callback = _noop
-
-        reply = await self._conn.execute(command)
-        reply = self._parse_reply(reply, parse_callback)
-        if isinstance(reply, self.ReplyError):
-            raise reply
-
-        return reply
+    async def _get_current_master_addr(self):
+        await self.sentinel.connect()
+        try:
+            return await self.sentinel.get_master_addr_by_name(self.master_name)
+        finally:
+            await self.sentinel.aclose()
 
     async def execute_many(self, commands, parse_callbacks=None):
-        if not parse_callbacks:
-            parse_callbacks = repeat(_noop)
+        delay = self.RECONNECT_DELAY
+        do_reconnect = False
 
-        replies = await self._conn.execute_many(commands)
-        replies = [
-            self._parse_reply(reply, cb)
-            for reply, cb in zip(replies, parse_callbacks)
-        ]
+        for n in range(self.MAX_RECONNECT_TRIES + 1):
+            if do_reconnect:
+                try:
+                    await self._reconnect()
+                except OSError:
+                    await trio.sleep(delay)
+                    delay *= self.RECONNECT_DELAY_INCREASE
+                    continue
 
-        return replies
+            try:
+                return await super().execute_many(commands, parse_callbacks)
+            except (self.ClosedError, self.ReadOnlyError):
+                do_reconnect = True
 
-    def _parse_reply(self, reply, parse_callback):
-        if isinstance(reply, hiredis.ReplyError):
-            reply = self.ReplyError.from_error_reply(reply)
-        else:
-            reply = parse_callback(reply)
-        return reply
+        raise self.ConnectError(f'unable to connect; conn={self._conn}')
+
+
+class Sentinel(_BareRedis, SentinelCommands):
+    """Sentinel client."""
+    CONNECT_TIMEOUT = 0.5
+
+    @classmethod
+    def from_url(cls, urls):
+        adresses = []
+
+        for url in urls:
+            tmp = _parse_url(url)
+            if 'db' in tmp:
+                raise ValueError('sentinal client does not support db selection')
+            adresses.append((tmp['host'], tmp['port']))
+
+        return cls(adresses)
+
+    def __init__(self, addresses):
+        # NOTE: super().__init__(...) not called on purpose.
+        # A custom initialization is done here.
+        self._connections = [Connection(*addr) for addr in addresses]
+        self._conn = None
+
+    async def connect(self):
+        # Behavior:
+        # - Try to connect to a sentinel node.
+        # - Abort if connect does not happen within CONNECT_TIMEOUT.
+        # - Connection errors are handled by catching OSError.
+        # - On success, move the connection to the beginning of the
+        #   connection list and stop break loop.
+        #
+        # See: https://redis.io/topics/sentinel-clients
+        if self._conn:
+            raise self.BusyError('sentinel client already connected')
+        for conn in self._connections[:]:
+            with trio.move_on_after(self.CONNECT_TIMEOUT) as cancel_scope:
+                try:
+                    await conn.connect()
+                except OSError:
+                    continue
+
+            if not cancel_scope.cancelled_caught:
+                self._connections.remove(conn)
+                self._connections.insert(0, conn)
+                self._conn = conn
+                return
+            else:
+                await conn.aclose()
+
+        raise self.ConnectError('unable to connect to sentinel node')
+
+    async def aclose(self):
+        await super().aclose()
+        self._conn = None
 
 
 class Pipeline(*_commands):
+    """Command pipeliner.
+
+    A pipeline object batches commands and executes all commands when
+    the object is awaited.
+
+    An in-order list of replies is returned. If there are no batched
+    commands, an empty list is returned.
+    """
     def __init__(self, redis):
         self._redis = redis
         self._buffer = []
@@ -241,7 +363,6 @@ def _parse_url(url):
     kwargs = {
         'host': DEFAULT_HOST,
         'port': DEFAULT_PORT,
-        'db': DEFAULT_DB,
     }
 
     url = urlparse(url)
@@ -255,10 +376,16 @@ def _parse_url(url):
     if url.port:
         kwargs['port'] = url.port
 
+    db = url.path[1:]
+    if db:
+        if not db.isdigit():
+            raise ValueError(f'db must be a digit in {url!r}')
+        kwargs['db'] = db
+
     params = parse_qs(url.query)
     for k, v in params.items():
         if len(v) > 1:
-            raise ValueError(f'parameter {k} set multiple times in URL')
+            raise ValueError(f'parameter {k} set multiple times in {url!r}')
         params[k] = v[0]
 
     kwargs.update(params)
