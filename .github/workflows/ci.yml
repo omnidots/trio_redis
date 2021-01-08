@@ -9,51 +9,47 @@ jobs:
       max-parallel: 4
       matrix:
         operating-system: [ubuntu-latest]
-        python-version: ['3.7', '3.8']
+        python-version: ['3.7', '3.8', '3.9']
     runs-on: ${{ matrix.operating-system }}
     services:
       redis:
-        image: redis:6.0.3-alpine3.11
+        image: redis:6.0.9-alpine3.12
         ports:
           - 6379:6379
         options: --entrypoint redis-server
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v2.1.1
+        uses: actions/checkout@v2.3.4
         with:
           fetch-depth: 1
 
       - name: Set up Python ${{ matrix.python-version }}
-        uses: actions/setup-python@v2.0.1
+        uses: actions/setup-python@v2.1.4
         with:
           python-version: ${{ matrix.python-version }}
 
-      - name: Install Poetry
-        run: |
-          curl -sSL https://raw.githubusercontent.com/python-poetry/poetry/master/get-poetry.py | python
-          echo "::add-path::~/.poetry/bin"
-
-      - name: Cache Poetry environment
-        uses: actions/cache@v2.0.0
+      - name: Cache pip packages
+        uses: actions/cache@v2.1.3
         id: cache
         with:
-          path: ~/.cache/pypoetry/virtualenvs
-          key: poetry-py${{ matrix.python-version }}-${{ hashFiles('**/poetry.lock') }}
+          path: ~/.cache/pip
+          key: pip-cache-py${{ matrix.python-version }}-${{ hashFiles('**/setup.py') }}
           restore-keys: |
-            poetry-py${{ matrix.python-version }}-${{ hashFiles('**/poetry.lock') }}
+            pip-py${{ matrix.python-version }}-${{ hashFiles('**/setup.py') }}
 
-      - name: Install dependencies
+      - name: Install trio_redis and test requirements
         run: |
-          poetry install
-        if: steps.cache.outputs.cache-hit != 'true'
+          python -m pip install 'wheel>=0.36.2'
+          python -m pip install --user -r tests/requirements.txt
+          python -m pip install --user -e .
 
       - name: Test trio_redis
         env:
           REDIS_HOST: localhost
           REDIS_PORT: ${{ job.services.redis.ports[6379] }}
         run: |
-          poetry run pytest --redis-url redis://$REDIS_HOST:$REDIS_PORT --cov-report=term
+          python -m pytest --redis-url redis://$REDIS_HOST:$REDIS_PORT --cov-report=term tests/
 
       - name: Flake8
         run: |
-          poetry run flake8
+          python -m flake8
