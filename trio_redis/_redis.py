@@ -43,6 +43,7 @@ DEFAULT_DB = 0
 
 class _BaseRedis:
     # Alias exceptions. No need to import them. :)
+    ConnectError = _errors.ConnectError
     BusyError = _errors.BusyError
     ClosedError = _errors.ClosedError
     ReplyError = _errors.ReplyError
@@ -199,7 +200,7 @@ class _BareRedis(_BaseRedis):
 
     def _parse_reply(self, reply, parse_callback):
         if isinstance(reply, hiredis.ReplyError):
-            reply = self.ReplyError.from_error_reply(reply)
+            reply = _errors.create_error_from_reply(reply)
         else:
             reply = parse_callback(reply)
         return reply
@@ -231,18 +232,30 @@ class Sentinel(_BareRedis, SentinelCommands):
         self._conn = None
 
     async def connect(self):
+        # Behavior:
+        # - Try to connect to a sentinel node.
+        # - Abort if connect does not happen within CONNECT_TRY_TIMEOUT.
+        # - Connection errors are handled by catching OSError.
+        # - On success, move the connection to the beginning of the
+        #   connection list and stop break loop.
+        #
+        # See: https://redis.io/topics/sentinel-clients
         for conn in self._connections[:]:
             with trio.move_on_after(self.CONNECT_TRY_TIMEOUT) as cancel_scope:
                 try:
                     await conn.connect()
-                except Exception:
+                except OSError:
                     continue
 
-            if not cancel_scope.cancel_caught:
+            if not cancel_scope.cancelled_caught:
                 self._connections.remove(conn)
                 self._connections.insert(0, conn)
                 self._conn = conn
-                break
+                return
+            else:
+                await conn.aclose()
+
+        raise self.ConnectError('unable to connect to sentinel node')
 
     async def aclose(self):
         await super().aclose()
