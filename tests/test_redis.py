@@ -2,7 +2,7 @@ import pytest
 import trio
 
 from trio_redis import Redis
-from trio_redis._redis import Pipeline
+from trio_redis._redis import Pipeline, _parse_url
 from trio_redis.testing_utils import TCPProxy
 
 
@@ -139,3 +139,36 @@ async def test_connection_reset_after_cancelled(redis, redis_url):
     async with trio.open_nursery() as nursery:
         nursery.start_soon(read)
         nursery.start_soon(write)
+
+
+@pytest.mark.parametrize('input_url,expected_kwargs', [
+    ('redis://localhost', {'host': 'localhost', 'port': 6379}),
+    ('redis://:26379', {'host': 'localhost', 'port': 26379}),
+    ('redis://', {'host': 'localhost', 'port': 6379}),
+    ('redis://localhost:26379', {'host': 'localhost', 'port': 26379}),
+    ('redis://localhost:26379/1', {'host': 'localhost', 'port': 26379, 'db': '1'}),
+    ('redis://localhost:26379/', {'host': 'localhost', 'port': 26379}),
+    (
+        'redis://localhost:26379?foo=bar&qux=baz',
+        {'host': 'localhost', 'port': 26379, 'foo': 'bar', 'qux': 'baz'},
+    ),
+    # NOTE: Confirm that username and password are not supported yet.
+    (
+        'redis://user:secret@localhost:26379?foo=bar&qux=baz',
+        {'host': 'localhost', 'port': 26379, 'foo': 'bar', 'qux': 'baz'},
+    ),
+])
+def test_parse_url(input_url, expected_kwargs):
+    assert _parse_url(input_url) == expected_kwargs
+
+
+@pytest.mark.parametrize('input_url,partial_error', [
+    ('://localhost', 'missing scheme'),
+    ('redis+tls://localhost', 'unsupported scheme'),
+    ('redis://localhost/foo', 'db must be a digit'),
+    ('redis://localhost/1?foo=bar&foo=bar', 'parameter foo set multiple times'),
+])
+def test_parse_invalid_url(input_url, partial_error):
+    with pytest.raises(ValueError) as excinfo:
+        _parse_url(input_url)
+    assert partial_error in str(excinfo.value)

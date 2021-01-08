@@ -299,10 +299,16 @@ def _parse_url(url):
     if url.port:
         kwargs['port'] = url.port
 
+    db = url.path[1:]
+    if db:
+        if not db.isdigit():
+            raise ValueError(f'db must be a digit in {url!r}')
+        kwargs['db'] = db
+
     params = parse_qs(url.query)
     for k, v in params.items():
         if len(v) > 1:
-            raise ValueError(f'parameter {k} set multiple times in URL')
+            raise ValueError(f'parameter {k} set multiple times in {url!r}')
         params[k] = v[0]
 
     kwargs.update(params)
