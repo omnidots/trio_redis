@@ -132,7 +132,8 @@ class ScriptingCommands:
 
 
 class SentinelCommands:
-    """TODO
+    """Commands for Redis Sentinel nodes.
+
     See: https://redis.io/topics/sentinel#sentinel-commands
     """
     def get_master_addr_by_name(self, master_name):
