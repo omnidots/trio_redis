@@ -47,6 +47,7 @@ class _BaseRedis:
     BusyError = _errors.BusyError
     ClosedError = _errors.ClosedError
     ReplyError = _errors.ReplyError
+    ReadOnlyError = _errors.ReadOnlyError
 
     @classmethod
     def from_url(cls, url):
@@ -60,6 +61,12 @@ class _BaseRedis:
 
     def pipeline(self):
         return Pipeline(self)
+
+    async def execute(self, command, parse_callback=None):
+        return (await self.execute_many([command], [parse_callback or _noop]))[0]
+
+    async def execute_many(self, commands, parse_callbacks=None):
+        raise NotImplementedError('please implement this')
 
 
 class RedisPool(_BaseRedis, *_commands):
@@ -145,13 +152,6 @@ class RedisPool(_BaseRedis, *_commands):
         finally:
             await self.release(client)
 
-    async def execute(self, command, parse_callback=None):
-        client = await self.acquire()
-        try:
-            return await client.execute(command, parse_callback)
-        finally:
-            await self.release(client)
-
     async def execute_many(self, commands, parse_callbacks=None):
         client = await self.acquire()
         try:
@@ -174,17 +174,6 @@ class _BareRedis(_BaseRedis):
 
     async def aclose(self):
         await self._conn.aclose()
-
-    async def execute(self, command, parse_callback=None):
-        if not parse_callback:
-            parse_callback = _noop
-
-        reply = await self._conn.execute(command)
-        reply = self._parse_reply(reply, parse_callback)
-        if isinstance(reply, self.ReplyError):
-            raise reply
-
-        return reply
 
     async def execute_many(self, commands, parse_callbacks=None):
         if not parse_callbacks:
