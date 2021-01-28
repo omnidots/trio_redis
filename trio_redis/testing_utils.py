@@ -4,11 +4,14 @@ Testing utilities for trio_redis.
 
 import itertools
 import logging
-import re
 import random
+import re
+import shutil
 import string
 import subprocess
+import tempfile
 from contextlib import asynccontextmanager
+from pathlib import Path
 from urllib.parse import urlparse
 
 import pytest
@@ -53,6 +56,16 @@ async def redis_server(request):
             yield docker_redis_url
     else:
         yield None
+
+
+@pytest.fixture(scope='function')
+async def redis_sentinel_cluster(request):
+    try:
+        m = SentinelManager()
+        await m.start()
+        yield m
+    finally:
+        await m.stop()
 
 
 @pytest.fixture(scope='function')
@@ -247,112 +260,92 @@ class TCPProxy:
 
 
 class SentinelManager:
-    """Start and manage sentinel clusters.
+    _SENTINEL_PORT = 26379
+    _REDIS_PORT = 6379
+    _MASTER_CONFIG = """\
+appendonly yes
+port {PORT}
+"""
+    _REPLICA_CONFIG = """\
+appendonly yes
+port {PORT}
+replicaof 127.0.0.1 {MASTER_PORT}
+"""
+    _SENTINEL_CONFIG = """\
+port {PORT}
+sentinel monitor test_cluster 127.0.0.1 {MASTER_PORT} {QUORUM}
+sentinel down-after-milliseconds test_cluster 5000
+sentinel failover-timeout test_cluster 60000
+sentinel parallel-syncs test_cluster 1
+"""
 
-    Arguments:
-        sentinels: Number of sentinel nodes.
-        masters: List of master node names.
-        replicas: Number of replicas per master node.
-    """
-    SENTINEL_START_PORT = 26379
-    MASTER_START_PORT = 6379
-    MASTER_PORT_STEP = 100
-
-    def __init__(self, sentinels, masters, replicas):
-        # Allocate ports for sentinel nodes.
-        self._sentinels = list(range(
-            self.SENTINEL_START_PORT,
-            SENTINEL_START_PORT + sentinels,
-        ))
-
-        # Allocate port for masters and replicas.
-        self._groups = {}
-        master_ports = itertools.count(
-            self.MASTER_START_PORT,
-            self.MASTER_PORT_STEP,
-        )
-        for port, name in zip(master_ports, masters):
-            replica_port_start = port + 1
-            self._groups[name] = {
-                'master': port,
-                'replicas': list(range(
-                    replica_port_start,
-                    replica_port_start + replicas,
-                )),
-            }
-
+    def __init__(self):
+        self.sentinel_count = 3
+        self.replica_count = 2
         self.logger = get_class_logger(self.__class__)
-        self._procs = {}  # port -> process
+
         self._tmp = None
+        self._sentinels = []
+        self._nodes = []
 
     async def start(self):
         self._tmp = Path(tempfile.mkdtemp())
 
-        # try:
-        #     for port in self.ports:
-        #         node_path = (self._tmp / port)
-        #         self._create_node_config(node_path, port)
-        #         self._procs.append(_RedisNodeProcess(node_path, port))
+        config = self._create_config(self._REDIS_PORT, self._MASTER_CONFIG, {
+            'PORT': self._REDIS_PORT,
+        })
+        self._nodes.append(RedisNodeProcess(config.parent, self._REDIS_PORT))
 
-        #     async with trio.open_nursery() as nursery:
-        #         for p in self._procs:
-        #             nursery.start_soon(p.open)
+        for n in range(1, self.replica_count + 1):
+            port = self._REDIS_PORT + n
+            config = self._create_config(port, self._REPLICA_CONFIG, {
+                'PORT': port,
+                'MASTER_PORT': self._REDIS_PORT,
+            })
+            self._nodes.append(RedisNodeProcess(config.parent, port))
 
-        #     await self._create_cluster()
-        # except Exception:
-        #     await self.stop()
-        #     raise
+        for n in range(self.sentinel_count):
+            port = self._SENTINEL_PORT + n
+            config = self._create_config(port, self._SENTINEL_CONFIG, {
+                'PORT': port,
+                'MASTER_PORT': self._REDIS_PORT,
+                'QUORUM': self.sentinel_count - 1,
+            })
+            self._sentinels.append(RedisSentinelProcess(config.parent, port))
+
+        for node in self._nodes:
+            await node.open()
+        for sentinel in self._sentinels:
+            await sentinel.open()
 
     async def stop(self):
-        async with trio.open_nursery() as nursery:
-            for p in self._procs:
-                nursery.start_soon(p.terminate)
-        self._procs = []
+        if not self._tmp:
+            return
+        for sentinel in self._sentinels:
+            await sentinel.terminate()
+        for node in self._nodes:
+            await node.terminate()
         shutil.rmtree(self._tmp)
 
-    def _create_node_config(self, node_path, port):
-        node_path.mkdir()
-        config_path = node_path / 'redis.conf'
-        config_path.write_text(_CLUSTER_CONFIG_TEMPLATE.format(port=port))
-
-    async def _create_cluster(self):
-        kwargs = {
-            'command': [
-                'redis-cli',
-                '--cluster', 'create',
-                '--cluster-replicas', '1',
-                '--cluster-yes',
-            ] + [p.addr for p in self._procs],
-            'stdout': subprocess.PIPE,
-            'stderr': subprocess.STDOUT,
-        }
-        async with await trio.open_process(**kwargs) as proc:
-            while proc.returncode is None:
-                self.logger.debug((await proc.stdout.receive_some()).decode('utf-8'))
-            if proc.returncode > 0:
-                raise OSError(f'redis-cli exited with {proc.returncode}')
-
-    def nodes(self):
-        return [p.url for p in self._procs]
+    def _create_config(self, port, template, params):
+        base = (self._tmp / str(port))
+        base.mkdir()
+        config = base / 'redis.conf'
+        config.write_text(template.format(**params))
+        return config
 
 
-class _RedisNodeProcess:
-    def __init__(self, cwd, port):
+class _RedisProcess:
+    def __init__(self, working_directory, port):
         self._proc = None
         self._kwargs = {
-            'command': [
-                'redis-server',
-                './redis.conf',
-                '--loglevel', 'verbose',
-            ],
+            'command': self.command(),
             'stdout': subprocess.PIPE,
             'stderr': subprocess.STDOUT,
-            'cwd': str(cwd),
+            'cwd': str(working_directory),
         }
 
         self.stdout = None
-        self.stderr = None
-
         self.host = '127.0.0.1'
         self.port = port
         self.addr = f'{self.host}:{self.port}'
@@ -360,15 +353,17 @@ class _RedisNodeProcess:
 
     async def open(self):
         self.stdout = None
-        self.stderr = None
 
         try:
             self._proc = await trio.open_process(**self._kwargs)
+            # TODO: TIMEOUT.
             while True:
                 if self._proc.returncode is not None:
                     raise OSError(f'redis-server exited with {self._proc.returncode}')
                 stdout = await self._proc.stdout.receive_some()
-                if b'Ready to accept connections' in stdout:
+                print('DEBUG', stdout)
+                if self.ready_message() in stdout:
+                    print('DEBUG DONE -----')
                     break
         except Exception:
             await self.terminate()
@@ -384,6 +379,29 @@ class _RedisNodeProcess:
 
     async def _drain(self, stream):
         return (await _drain_stream(stream)).decode('utf-8')
+
+    def command(self):
+        return [
+            'redis-server',
+            './redis.conf',
+            '--loglevel', 'verbose',
+        ]
+
+    def ready_message(self):
+        raise NotImplementedError
+
+
+class RedisNodeProcess(_RedisProcess):
+    def ready_message(self):
+        return b'* Ready to accept connections'
+
+
+class RedisSentinelProcess(_RedisProcess):
+    def command(self):
+        return super().command() + ['--sentinel']
+
+    def ready_message(self):
+        return b'* Running mode=sentinel, port='
 
 
 def get_class_logger(cls):
