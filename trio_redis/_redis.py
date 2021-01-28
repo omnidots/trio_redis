@@ -199,7 +199,37 @@ class Redis(_BareRedis, *_commands):
     pass
 
 
-class Sentinel(_BareRedis, SentinelCommands):
+class RedisSentinel(Redis):
+    @classmethod
+    def from_sentinel(cls, master_name, urls):
+        return cls(master_name, SentinelClient.from_url(urls))
+
+    def __init__(self, master_name, sentinel_client):
+        self.master_name = master_name
+        self.sentinel_client = sentinel_client
+        self._conn = None
+
+    async def connect(self):
+        await self.sentinel_client.connect()
+        addr = await self.sentinel_client.get_master_addr_by_name()
+        self._conn = Connection(*addr)
+        await self._conn.connect()
+
+    async def aclose(self):
+        await self._conn.aclose()
+        await self.sentinel_client.aclose()
+        self._conn = None
+
+    async def execute_many(self, commands, parse_callbacks=None):
+        while True:
+            try:
+                return super().execute_many(commands, parse_callbacks)
+            except Exception:
+                await self.aclose()
+                await self.connect()
+
+
+class SentinelClient(_BareRedis, SentinelCommands):
     CONNECT_TRY_TIMEOUT = 0.5
 
     @classmethod
