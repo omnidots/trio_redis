@@ -54,7 +54,7 @@ jobs:
           REDIS_HOST: localhost
           REDIS_PORT: ${{ job.services.redis.ports[6379] }}
         run: |
-          python -m pytest --local-redis --cov-report=term tests/
+          python -m pytest --local-redis --log-cli-level=DEBUG --cov-report=term tests/
 
       - name: Flake8
         run: |
