@@ -3,10 +3,7 @@ Testing utilities for trio_redis.
 """
 
 import logging
-import random
-import re
 import shutil
-import string
 import subprocess
 import tempfile
 from contextlib import asynccontextmanager
@@ -22,11 +19,7 @@ from ._redis import Redis, RedisPool, DEFAULT_HOST, DEFAULT_PORT
 logger = logging.getLogger(__name__)
 
 
-DEFAULT_REDIS_IMAGE = 'redis:6.0.9-alpine3.12'
 DEFAULT_REDIS_URL = 'redis://localhost'
-
-
-_RE_DOCKER_PORT_MAPPING = re.compile(b'\\d+/tcp -> .*?:(?P<host_port>\\d+)')
 
 
 def pytest_addoption(parser):
@@ -37,22 +30,19 @@ def pytest_addoption(parser):
         help='URL to Redis, e.g. redis://<hostname>[:<port>]',
     )
     parser.addoption(
-        '--docker-redis',
+        '--local-redis',
         action='store_true',
         default=False,
-        help='Start a Redis container.',
+        help='Start a Redis server.',
     )
 
 
-# NOTE: Trio fixtures must be function-scope. This makes the tests
-# slower when --docker-redis is given, because a Redis container is
-# started for every test.
 @pytest.fixture(scope='function')
 async def redis_server(request):
-    docker_redis = request.config.getoption('--docker-redis')
-    if docker_redis:
-        async with _new_redis_server() as docker_redis_url:
-            yield docker_redis_url
+    local_server = request.config.getoption('--local-redis')
+    if local_server:
+        async with _new_redis_server() as local_server_url:
+            yield local_server_url
     else:
         yield None
 
@@ -60,7 +50,7 @@ async def redis_server(request):
 @pytest.fixture(scope='function')
 async def redis_sentinel_cluster(request):
     try:
-        m = SentinelManager()
+        m = RedisSentinelManager()
         await m.start()
         yield m
     finally:
@@ -115,68 +105,17 @@ async def _new_x(cls, url):
 
 @asynccontextmanager
 async def _new_redis_server():
-    container_name = _redis_container_name()
-    kwargs = {
-        'command': _redis_container_args(container_name),
-        'stdout': subprocess.PIPE,
-        'stderr': subprocess.PIPE,
-    }
+    tmp = Path(tempfile.mkdtemp())
+    cfg = tmp / 'redis.conf'
+    cfg.write_text('appendonly yes')
+    prc = RedisNodeProcess(tmp, DEFAULT_PORT)
 
-    async with await trio.open_process(**kwargs) as proc:
-        has_error = False
-
-        try:
-            while True:
-                if proc.poll() is not None:
-                    raise RuntimeError('Redis server exited')
-                stdout = await proc.stdout.receive_some()
-                if b'Ready to accept connections' in stdout:
-                    break
-            host_port = await _redis_container_port(container_name)
-            url = f'redis://localhost:{host_port}'
-            yield url
-        except Exception:
-            has_error = True
-            raise
-        finally:
-            if has_error:
-                logger.error('STDERR: ' + (await _drain_stream(proc.stderr)).decode('utf-8'))
-            proc.terminate()
-            await proc.wait()
-
-
-def _redis_container_name():
-    return f'pytest-redis-{_random_string()}'
-
-
-def _redis_container_args(container_name):
-    return [
-        'docker',
-        'run',
-        '-p', '6379',  # No host port means 'choose random port'.
-        '--name', container_name,
-        '--rm',
-        DEFAULT_REDIS_IMAGE,
-    ]
-
-
-async def _redis_container_port(container_name):
-    completed_proc = await trio.run_process(
-        command=['docker', 'port', container_name],
-        capture_stdout=True,
-        stderr=subprocess.STDOUT,
-    )
-    port_mapping = completed_proc.stdout
-    match = _RE_DOCKER_PORT_MAPPING.match(port_mapping)
-    port_mapping = match.groupdict()
-    if match is None:
-        raise ValueError(f'cannot get host port from {port_mapping!r}')
-    host_port = int(port_mapping['host_port'].decode('utf-8'))
-    return host_port
-
-
-def _random_string():
-    return ''.join(random.choices(string.ascii_lowercase, k=6))
+    try:
+        await prc.open()
+        yield f'redis://localhost:{DEFAULT_PORT}'
+    finally:
+        await prc.terminate()
+        shutil.rmtree(tmp)
 
 
 async def _drain_stream(stream):
@@ -258,7 +197,7 @@ class TCPProxy:
         pass
 
 
-class SentinelManager:
+class RedisSentinelManager:
     _SENTINEL_PORT = 26379
     _REDIS_PORT = 6379
     _MASTER_CONFIG = """\
