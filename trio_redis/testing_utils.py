@@ -2,7 +2,6 @@
 Testing utilities for trio_redis.
 """
 
-import itertools
 import logging
 import random
 import re
@@ -345,26 +344,23 @@ class _RedisProcess:
             'cwd': str(working_directory),
         }
 
-        self.stdout = None
         self.host = '127.0.0.1'
         self.port = port
         self.addr = f'{self.host}:{self.port}'
         self.url = f'redis://{self.addr}'
+        self.logger = get_class_logger(self.__class__, self.url)
 
     async def open(self):
-        self.stdout = None
-
         try:
             self._proc = await trio.open_process(**self._kwargs)
-            # TODO: TIMEOUT.
-            while True:
-                if self._proc.returncode is not None:
-                    raise OSError(f'redis-server exited with {self._proc.returncode}')
-                stdout = await self._proc.stdout.receive_some()
-                print('DEBUG', stdout)
-                if self.ready_message() in stdout:
-                    print('DEBUG DONE -----')
-                    break
+            with trio.fail_after(5.0):
+                while True:
+                    if self._proc.returncode is not None:
+                        raise OSError(f'redis-server exited with {self._proc.returncode}')
+                    stdout = await self._proc.stdout.receive_some()
+                    self.logger.debug(stdout.decode('utf-8'))
+                    if self.ready_message() in stdout:
+                        break
         except Exception:
             await self.terminate()
             raise
@@ -374,7 +370,8 @@ class _RedisProcess:
             return
         self._proc.terminate()
         await self._proc.wait()
-        self.stdout = await self._drain(self._proc.stdout)
+        stdout = await self._drain(self._proc.stdout)
+        self.logger.debug(stdout)
         self._proc = None
 
     async def _drain(self, stream):
@@ -404,5 +401,8 @@ class RedisSentinelProcess(_RedisProcess):
         return b'* Running mode=sentinel, port='
 
 
-def get_class_logger(cls):
-    return logging.getLogger(f'{cls.__module__}.{cls.__name__}')
+def get_class_logger(cls, suffix=''):
+    name = f'{cls.__module__}.{cls.__name__}'
+    if suffix:
+        name += f'({suffix})'
+    return logging.getLogger()

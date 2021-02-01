@@ -22,6 +22,7 @@ from ._connection import Connection
 __all__ = [
     'Redis',
     'RedisPool',
+    'RedisSentinel',
 ]
 
 
