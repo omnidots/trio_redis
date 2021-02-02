@@ -212,7 +212,7 @@ class RedisSentinel(Redis):
 
     async def connect(self):
         await self.sentinel_client.connect()
-        addr = await self.sentinel_client.get_master_addr_by_name()
+        addr = await self.sentinel_client.get_master_addr_by_name(self.master_name)
         self._conn = Connection(*addr)
         await self._conn.connect()
 
@@ -221,13 +221,26 @@ class RedisSentinel(Redis):
         await self.sentinel_client.aclose()
         self._conn = None
 
+    async def _reconnect(self):
+        addr = await self.sentinel_client.get_master_addr_by_name(self.master_name)
+        self._conn = Connection(*addr)
+        await self._conn.connect()
+
     async def execute_many(self, commands, parse_callbacks=None):
+        do_reconnect = False
+
         while True:
+            if do_reconnect:
+                try:
+                    await self._reconnect()
+                except OSError:
+                    await trio.sleep(0.5)
+                    continue
+
             try:
-                return super().execute_many(commands, parse_callbacks)
-            except Exception:
-                await self.aclose()
-                await self.connect()
+                return await super().execute_many(commands, parse_callbacks)
+            except (self.ClosedError, self.ReadOnlyError):
+                do_reconnect = True
 
 
 class SentinelClient(_BareRedis, SentinelCommands):

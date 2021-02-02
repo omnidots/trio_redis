@@ -13,7 +13,7 @@ from urllib.parse import urlparse
 import pytest
 import trio
 
-from ._redis import Redis, RedisPool, DEFAULT_HOST, DEFAULT_PORT
+from ._redis import Redis, RedisPool, SentinelClient, DEFAULT_HOST, DEFAULT_PORT
 
 
 logger = logging.getLogger(__name__)
@@ -244,6 +244,15 @@ sentinel parallel-syncs test_cluster 1
         for sentinel in self._sentinels:
             await sentinel.open()
 
+        # Wait until sentinel has discovered the replicas.
+        # Otherwise automatic failover is not possible.
+        sc = await self._sentinel_client()
+        with trio.fail_after(10.0):
+            while True:
+                if len(await sc.replicas('test_cluster')) == 2:
+                    await trio.sleep(1.0)
+                    break
+
     async def stop(self):
         if not self._tmp:
             return
@@ -259,6 +268,38 @@ sentinel parallel-syncs test_cluster 1
         config = base / 'redis.conf'
         config.write_text(template.format(**params))
         return config
+
+    async def kill_master(self):
+        # Lookup master address and process.
+        sc = await self._sentinel_client()
+        addr = await sc.get_master_addr_by_name('test_cluster')
+        proc = await self._lookup_node_by_port(addr[1])
+
+        # Kill server.
+        rc = Redis(*addr)
+        await rc.connect()
+        try:
+            await rc.execute([b'DEBUG', b'SEGFAULT'])
+        except rc.ClosedError:
+            # We're segfaulting the server. Errors can be ignored. :)
+            pass
+
+        await proc.terminate()
+        await sc.aclose()
+
+    async def _sentinel_client(self):
+        client = SentinelClient.from_url(self.sentinels())
+        await client.connect()
+        return client
+
+    async def _lookup_node_by_port(self, port):
+        for node in self._nodes:
+            if node.port == port:
+                return node
+        raise ValueError(f'no process with port {port}')
+
+    def sentinels(self):
+        return [s.url for s in self._sentinels]
 
 
 class _RedisProcess:
