@@ -118,18 +118,6 @@ async def _new_redis_server():
         shutil.rmtree(tmp)
 
 
-async def _drain_stream(stream):
-    buf = []
-
-    while True:
-        data = await stream.receive_some()
-        if not data:
-            break
-        buf.append(data)
-
-    return b''.join(buf)
-
-
 async def fail_if_not_between(after, before, coroutine):
     with trio.move_on_after(after):
         result = False
@@ -307,14 +295,23 @@ class _RedisProcess:
     async def terminate(self):
         if self._proc is None:
             return
-        self._proc.terminate()
-        await self._proc.wait()
-        stdout = await self._drain(self._proc.stdout)
-        self.logger.debug(stdout)
-        self._proc = None
 
-    async def _drain(self, stream):
-        return (await _drain_stream(stream)).decode('utf-8')
+        # Kill process.
+        with trio.move_on_after(2.0) as cancel_scope:
+            self._proc.terminate()
+            await self._proc.wait()
+        if cancel_scope.cancelled_caught:
+            self._proc.kill()
+            await self._proc.wait()
+
+        # Collect and log all output.
+        stdout = ''
+        with trio.move_on_after(2.0):
+            async for data in drain_stream(self._proc.stdout):
+                stdout += data
+        self.logger.debug(stdout)
+
+        self._proc = None
 
     def command(self):
         return [
@@ -345,3 +342,11 @@ def get_class_logger(cls, suffix=''):
     if suffix:
         name += f'({suffix})'
     return logging.getLogger()
+
+
+async def drain_stream(stream):
+    while True:
+        data = (await stream.receive_some()).decode('utf-8')
+        if not data:
+            break
+        yield data
