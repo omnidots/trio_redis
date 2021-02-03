@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.3.0
+
+- Get db from Redis URL path part in _redis._parse_url().
+- Use a local Redis server for testing. Tests are much faster.
+- Add RedisSentinel, a client that gets the address of the Redis server
+  from a list Sentinel servers (on connect and on reconnect after a
+  fail-over).
+
 ## 0.2.3
 
 - Replace Poetry with Setuptools.
