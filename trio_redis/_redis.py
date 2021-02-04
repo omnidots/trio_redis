@@ -96,7 +96,7 @@ class _BareRedis(_BaseRedis):
 
     def _parse_reply(self, reply, parse_callback):
         if isinstance(reply, hiredis.ReplyError):
-            reply = _errors.create_error_from_reply(reply)
+            raise _errors.create_error_from_reply(reply)
         else:
             reply = parse_callback(reply)
         return reply
