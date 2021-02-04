@@ -9,6 +9,7 @@ __all__ = [
     'ConnectionCommands',
     'KeysCommands',
     'ScriptingCommands',
+    'SentinelCommands',
     'ServerCommands',
     'SortedSetCommands',
     'StreamCommands',
@@ -17,6 +18,10 @@ __all__ = [
 
 
 _EMPTY_TUPLE = tuple()  # noqa: C408
+
+
+def _to_str(b):
+    return b.decode('utf-8')
 
 
 def bool_ok(reply):
@@ -98,6 +103,10 @@ def parse_zadd(reply, as_score=False):
     return int(reply)
 
 
+def parse_master_addr(reply):
+    return (_to_str(reply[0]), int(reply[1]))
+
+
 class ConnectionCommands:
     def select(self, index):
         return self.execute([b'SELECT', index])
@@ -129,6 +138,33 @@ class ScriptingCommands:
 
     def script_exists(self, *sha1):
         return self.execute([b'SCRIPT', b'EXISTS', *sha1], parse_int_bool_list)
+
+
+class SentinelCommands:
+    """Commands for Redis Sentinel nodes.
+
+    See: https://redis.io/topics/sentinel#sentinel-commands
+    """
+    def get_master_addr_by_name(self, master_name):
+        return self.execute(
+            [b'SENTINEL', b'GET-MASTER-ADDR-BY-NAME', master_name],
+            parse_master_addr,
+        )
+
+    def master(self, master_name):
+        return self.execute([b'SENTINEL', b'MASTER', master_name], pairs_to_dict)
+
+    def masters(self):
+        return self.execute([b'SENTINEL', b'MASTERS'])
+
+    def myid(self):
+        return self.execute([b'SENTINEL', b'MYID'])
+
+    def replicas(self, master_name):
+        return self.execute([b'SENTINEL', b'REPLICAS', master_name])
+
+    def sentinels(self, master_name):
+        return self.execute([b'SENTINEL', b'SENTINELS', master_name])
 
 
 class ServerCommands:
