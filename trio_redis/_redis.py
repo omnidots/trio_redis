@@ -136,22 +136,26 @@ class RedisPool(_BaseRedis, *_commands):
     def redis(cls, host=None, port=None, db=None, url=None, **pool_kwargs):
         if ((host or port) and url) or not ((host or port) or url):
             raise ValueError('either host and port OR url must be given')
+
         def redis_factory():
             if host or port:
                 return Redis(host, port, db)
             else:
                 return Redis.from_url(url)
+
         return cls(redis_factory, **pool_kwargs)
 
     @classmethod
     def redis_sentinel(cls, master_name, addresses=None, urls=None, **pool_kwargs):
         if (addresses and urls) or not (addresses or urls):
             raise ValueError('either addresses OR urls must be given')
+
         def redis_sentinel_factory():
             if addresses:
                 return RedisSentinel(master_name, addresses)
             else:
                 return RedisSentinel.from_url(master_name, urls)
+
         return cls(redis_sentinel_factory, **pool_kwargs)
 
     async def connect(self):
