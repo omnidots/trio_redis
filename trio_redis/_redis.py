@@ -134,7 +134,7 @@ class RedisPool(_BaseRedis, *_commands):
 
     @classmethod
     def redis(cls, host=None, port=None, db=None, url=None, **pool_kwargs):
-        if ((host or port) and url) or not ((host or port) or url):
+        if bool(host or port) == bool(url):
             raise ValueError('either host and port OR url must be given')
 
         def redis_factory():
@@ -147,7 +147,7 @@ class RedisPool(_BaseRedis, *_commands):
 
     @classmethod
     def redis_sentinel(cls, master_name, addresses=None, urls=None, **pool_kwargs):
-        if (addresses and urls) or not (addresses or urls):
+        if bool(addresses) == bool(urls):
             raise ValueError('either addresses OR urls must be given')
 
         def redis_sentinel_factory():
