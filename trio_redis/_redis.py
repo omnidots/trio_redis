@@ -50,16 +50,6 @@ class _BaseRedis:
     ReplyError = _errors.ReplyError
     ReadOnlyError = _errors.ReadOnlyError
 
-    @classmethod
-    def from_url(cls, url):
-        kwargs = _parse_url(url)
-        return cls(**kwargs)
-
-    def __init__(self, host=None, port=None, db=None):
-        self.host = host or DEFAULT_HOST
-        self.port = DEFAULT_PORT if port is None else port
-        self.db = db
-
     def pipeline(self):
         return Pipeline(self)
 
@@ -72,8 +62,16 @@ class _BaseRedis:
 
 class _BareRedis(_BaseRedis):
     """Redis client w/o command methods."""
+
+    @classmethod
+    def from_url(cls, url):
+        kwargs = _parse_url(url)
+        return cls(**kwargs)
+
     def __init__(self, host=None, port=None, db=None):
-        super().__init__(host, port, db)
+        self.host = host or DEFAULT_HOST
+        self.port = DEFAULT_PORT if port is None else port
+        self.db = db
         self._conn = Connection(self.host, self.port)
 
     async def connect(self):
@@ -111,31 +109,61 @@ class RedisPool(_BaseRedis, *_commands):
     commands (except SELECT) are implemented, acquiring and releasing
     clients is done behind the scenes.
 
+    ``client_factory`` is a function that returns a new instance of a
+    client class. E.g. an instance of Redis or RedisSentinel.
+
     ``minimum`` is the minimum amount of clients created. When needed
     new client instances are created until ``maximum`` is reached.
 
     An instance of this class can be used concurrently. Instances of
     ``Redis`` cannot.
     """
-    def __init__(self, host=None, port=None, db=None, minimum=1, maximum=10):
-        super().__init__(host, port, db)
+    def __init__(self, client_factory, minimum=1, maximum=10):
+        self.client_factory = client_factory
         self.minimum = minimum
         self.maximum = maximum
-        self._limit = trio.Semaphore(maximum)
 
+        self._limit = trio.Semaphore(maximum)
         self._free = []
         self._not_free = []
 
+    @classmethod
+    def from_url(cls, client_factory, url):
+        kwargs = _parse_url(url)
+        return cls(client_factory, **kwargs)
+
+    @classmethod
+    def redis(cls, host=None, port=None, db=None, url=None, **pool_kwargs):
+        if ((host or port) and url) or not ((host or port) or url):
+            raise ValueError('either host and port OR url must be given')
+        def redis_factory():
+            if host or port:
+                return Redis(host, port, db)
+            else:
+                return Redis.from_url(url)
+        return cls(redis_factory, **pool_kwargs)
+
+    @classmethod
+    def redis_sentinel(cls, master_name, addresses=None, urls=None, **pool_kwargs):
+        if (addresses and urls) or not (addresses or urls):
+            raise ValueError('either addresses OR urls must be given')
+        def redis_sentinel_factory():
+            if addresses:
+                return RedisSentinel(master_name, addresses)
+            else:
+                return RedisSentinel.from_url(master_name, urls)
+        return cls(redis_sentinel_factory, **pool_kwargs)
+
     async def connect(self):
         async def add():
-            self._free.append(await self._new_redis())
+            self._free.append(await self._new_client())
 
         async with trio.open_nursery() as nursery:
             for n in range(self.minimum):
                 nursery.start_soon(add)
 
-    async def _new_redis(self):
-        client = Redis(self.host, self.port, self.db)
+    async def _new_client(self):
+        client = self.client_factory()
         await client.connect()
         return client
 
@@ -159,7 +187,7 @@ class RedisPool(_BaseRedis, *_commands):
         try:
             client = self._free.pop()
         except IndexError:
-            client = await self._new_redis()
+            client = await self._new_client()
 
         self._not_free.append(client)
 
@@ -280,8 +308,6 @@ class Sentinel(_BareRedis, SentinelCommands):
         return cls(adresses)
 
     def __init__(self, addresses):
-        # NOTE: super().__init__(...) not called on purpose.
-        # A custom initialization is done here.
         self._connections = [Connection(*addr) for addr in addresses]
         self._conn = None
 

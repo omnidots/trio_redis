@@ -81,19 +81,19 @@ async def redis_pool(redis_url):
 
 @asynccontextmanager
 async def new_redis(url):
-    async with _new_x(Redis, url) as client:
-        yield client
+    obj = Redis.from_url(url)
+    try:
+        await obj.connect()
+        yield obj
+    finally:
+        await obj.flushdb()
+        await obj.script_flush()
+        await obj.aclose()
 
 
 @asynccontextmanager
 async def new_redis_pool(url):
-    async with _new_x(RedisPool, url) as pool:
-        yield pool
-
-
-@asynccontextmanager
-async def _new_x(cls, url):
-    obj = cls.from_url(url)
+    obj = RedisPool.redis(url=url)
     try:
         await obj.connect()
         yield obj

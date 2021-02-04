@@ -1,4 +1,4 @@
-from trio_redis import RedisSentinel
+from trio_redis import RedisPool, RedisSentinel
 from trio_redis._redis import Sentinel
 
 
@@ -23,6 +23,23 @@ async def test_failover(redis_sentinel_cluster):
     client = RedisSentinel.from_url(
         'test_cluster',
         redis_sentinel_cluster.sentinels(),
+    )
+    await client.connect()
+    await client.set('x', 1)
+
+    # Force fail=over by killing the current master.
+    await redis_sentinel_cluster.kill_master()
+
+    # This should block until the new master is available.
+    assert await client.get('x') == b'1'
+
+    await client.aclose()
+
+
+async def test_failover_with_pool(redis_sentinel_cluster):
+    client = RedisPool.redis_sentinel(
+        'test_cluster',
+        urls=redis_sentinel_cluster.sentinels(),
     )
     await client.connect()
     await client.set('x', 1)
