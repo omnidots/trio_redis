@@ -7,6 +7,8 @@
 - Add RedisSentinel, a client that gets the address of the Redis server
   from a list Sentinel servers (on connect and on reconnect after a
   fail-over).
+- RedisPool now accepts a factory function to allow pooling of any
+  Redis-like client (e.g. Redis and RedisSentinel).
 
 ## 0.2.3
 
